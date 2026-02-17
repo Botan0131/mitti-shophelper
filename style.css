@@ -481,27 +481,27 @@ body[data-mode="SIMPLE"] .item-grid{
   }
 }
 
-/* Update toast */
+/* ------------------------------
+   アップデート通知（PWA）
+-------------------------------- */
 .toast{
   position: fixed;
   left: 12px;
   right: 12px;
-  bottom: 84px; /* footerの上に出す */
-  z-index: 50;
+  bottom: 12px;
+  z-index: 9999;
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px;
-  border: 1px solid rgba(0,255,240,.35);
-  background: rgba(8, 12, 28, .92);
-  box-shadow: 0 0 24px rgba(0,255,240,.18), 0 0 42px rgba(255,60,150,.10);
+  padding: 12px 14px;
   border-radius: 14px;
-  backdrop-filter: blur(8px);
+  border: 1px solid rgba(145, 215, 255, 0.25);
+  background: rgba(6, 10, 24, 0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.38);
 }
 .toast.is-hidden{ display:none; }
-.toast-text{
-  color: #e9f2ff;
-  font-size: 13px;
-  line-height: 1.35;
-}
+.toast .toast-text{ font-size: 13px; line-height: 1.35; }
+.toast .toast-actions{ display:flex; gap:10px; align-items:center; }
+

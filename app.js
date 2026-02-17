@@ -70,12 +70,35 @@ function loadState(){
     return defaultState();
   }
 }
-function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+let _saveTimer = null;
+let _saveWarned = false;
+function saveStateNow(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }catch(e){
+    // 保存に失敗してもアプリが止まらないようにします（容量不足 / ブラウザ設定など）
+    if(!_saveWarned){
+      _saveWarned = true;
+      alert(`端末への保存に失敗しました。
+空き容量やブラウザ設定を確認してください。
+（このまま使えますが、閉じると入力が消える可能性があります。）`);
+    }
+    console.warn("saveState failed:", e);
+  }
+}
+function saveState(){
+  // 既存呼び出し互換：即時保存
+  saveStateNow();
+}
+function saveStateDebounced(ms = 150){
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveStateNow, ms);
+}
 
 let state = loadState();
 // --- Mode (SIMPLE / PRO) ---
 state.ui = state.ui || {};
-state.ui.mode = state.ui.mode || "PRO";
+state.ui.mode = state.ui.mode || "SIMPLE";
 
 function applyModeToDom(){
   document.body.dataset.mode = state.ui.mode;
@@ -892,9 +915,17 @@ function renderCart(){
           target[k] = el.value;
         }
 
-        saveState();
+        // 入力中は再描画しない（フォーカスが飛ぶのを防ぐ）
+        // 状態だけ更新し、合計だけ再計算します。
+        saveStateDebounced();
+
+        if (k === "name"){
+          const t = target.name?.trim() ? target.name.trim() : "（名称未入力）";
+          const titleEl = div.querySelector(".item-title");
+          if (titleEl) titleEl.textContent = t;
+        }
+
         renderTotals();
-        renderCart();
       });
     });
 
@@ -927,7 +958,7 @@ function renderTotals(){
   td.type = $("totalDiscountType").value;
   td.value = safeNum($("totalDiscountValue").value, 0);
   td.target = $("totalDiscountTarget").value;
-  saveState();
+  saveStateDebounced();
 
   const res = computeTransaction(shop, state.cart, state.cartSettings);
 
@@ -1164,14 +1195,17 @@ function normalizeImportedShop(s){
    HTMLエスケープ
 -------------------------------- */
 function escapeHtml(s){
+  // replaceAll 非対応ブラウザでも動くように、正規表現でエスケープします
   return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
-function escapeAttr(s){ return escapeHtml(s).replaceAll("\n"," "); }
+function escapeAttr(s){
+  return escapeHtml(s).replace(/\n/g, " ");
+}
 
 /* ------------------------------
    イベント
@@ -1523,17 +1557,10 @@ $("bgmVolume").addEventListener("input", (e) => {
     const shop = getSelectedShop();
     const rate = shop?.ratesEnabled?.[0] ?? 0.10;
     state.cart.push(defaultItem(rate));
-    saveState();
+    saveStateNow();
+    renderCart();
     renderTotals();
-
-// 入力中に再描画しない（フォーカスが飛ぶのを防ぐ）
-// 商品名だけは、タイトル表示をその場で更新する
-  if (k === "name") {
-    const t = target.name?.trim() ? target.name.trim() : "（名称未入力）";
-    const titleEl = div.querySelector(".item-title");
-  if (titleEl) titleEl.textContent = t;
-}
-}
+  }
 
   if (soundPrefs.bgm){
     soundPrefs.bgm = false;
