@@ -1,0 +1,11 @@
+{
+  "name": "MITTI ShopHelper NEON v1.0",
+  "short_name": "MITTI",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#060812",
+  "theme_color": "#0b1020",
+  "description": "みっちのための買い物計算アプリ（オフライン対応）",
+  "lang": "ja",
+  "orientation": "portrait"
+}
