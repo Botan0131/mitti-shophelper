@@ -1,5 +1,5 @@
-/* MITTI ShopHelper Service Worker (v1.0.2) */
-const CACHE_NAME = "mitti-shophelper-neon-v1.0.2";
+/* MITTI ShopHelper Service Worker (v1.0.3) */
+const CACHE_NAME = "mitti-shophelper-neon-v1.0.3";
 const CORE_ASSETS = [
   "./",
   "./index.html",

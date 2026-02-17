@@ -1,1570 +1,1004 @@
-/* MITTI ShopHelper v2 + NEON UX
-   - サウンド（WebAudioで生成）BGM / SFX
-   - タブ下線アニメ・画面遷移アニメ
-   - 文言：操作系は短く、説明文は丁寧に
+/* MITTI ShopHelper v1.0.3
+   - 税率 8/10
+   - 店プロフィール（計算ルール + 丸め/roundTo + inclToBaseRounding）
+   - 履歴（店ルールもスナップショット保存）
+   - 簡単モード / 詳細モード
+   - 割引（行/合計、%/円）
+   - レシート検証（差分→丸め候補）
+   - エクスポート/インポート
 */
 
-const STORAGE_KEY = "mitti_shophelper_v2";
-const SOUND_KEY = "mitti_shophelper_sound_v1";
+(() => {
+  "use strict";
 
-const $ = (id) => document.getElementById(id);
-const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
-const safeInt = (v, d=0) => {
-  const n = Number(String(v).replace(/[^\d.-]/g, ""));
-  return Number.isFinite(n) ? Math.trunc(n) : d;
-};
-const safeNum = (v, d=0) => {
-  const n = Number(String(v).replace(/[^\d.-]/g, ""));
-  return Number.isFinite(n) ? n : d;
-};
-const yen = (n) => `${Math.round(n).toLocaleString("ja-JP")}円`;
-
-const uuid = () => {
-  try { return crypto.randomUUID(); }
-  catch { return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`; }
-};
-
-const TAX_RATES = [
-  { label: "8%", value: 0.08 },
-  { label: "10%", value: 0.10 },
-];
-
-function roundTo(value, method, unit = 1){
-  const u = Math.max(1, Number(unit) || 1);
-  const x = value / u;
-  let y = x;
-  if (method === "FLOOR") y = Math.floor(x);
-  else if (method === "CEIL") y = Math.ceil(x);
-  else y = Math.round(x);
-  return y * u;
-}
-
-function nowISO(){ return new Date().toISOString(); }
-
-function defaultShopPolicy(preset){
-  if (preset === "PRESET_RATE_GROUP"){
-    return { aggregation:"RATE_GROUP_ROUND", roundingMethod:"ROUND", roundingUnit:1, inclToBaseRounding:"NONE" };
-  }
-  return { aggregation:"ITEM_ROUND", roundingMethod:"FLOOR", roundingUnit:1, inclToBaseRounding:"NONE" };
-}
-
-function defaultState(){
-  return {
-    version: 2,
-    shops: [],
-    selectedShopId: null,
-    cart: [],
-    cartSettings: { totalDiscount: { type:"NONE", value:0, target:"BASE" } },
-    history: [],
-    ui: { shopEditingId: null, lastVerifySuggestion: null }
+  // ========= Utilities =========
+  const yen = (n) => {
+    const v = Number.isFinite(n) ? Math.round(n) : 0;
+    return v.toLocaleString("ja-JP");
   };
-}
 
-function loadState(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return defaultState();
-    const s = JSON.parse(raw);
-    return { ...defaultState(), ...s };
-  }catch{
-    return defaultState();
-  }
-}
-let _saveTimer = null;
-let _saveWarned = false;
-function saveStateNow(){
-  try{
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }catch(e){
-    // 保存に失敗してもアプリが止まらないようにします（容量不足 / ブラウザ設定など）
-    if(!_saveWarned){
-      _saveWarned = true;
-      alert(`端末への保存に失敗しました。
-空き容量やブラウザ設定を確認してください。
-（このまま使えますが、閉じると入力が消える可能性があります。）`);
-    }
-    console.warn("saveState failed:", e);
-  }
-}
-function saveState(){
-  // 既存呼び出し互換：即時保存
-  saveStateNow();
-}
-function saveStateDebounced(ms = 150){
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(saveStateNow, ms);
-}
+  const nowStamp = () => {
+    const d = new Date();
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
-let state = loadState();
-// --- Mode (SIMPLE / PRO) ---
-state.ui = state.ui || {};
-state.ui.mode = state.ui.mode || "SIMPLE";
+  const uid = () => Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
 
-function applyModeToDom(){
-  document.body.dataset.mode = state.ui.mode;
-  const btn = document.getElementById("modeToggle");
-  if (btn) btn.textContent = `モード：${state.ui.mode === "SIMPLE" ? "簡単" : "詳細"}`;
-}
+  const clampTax = (t) => (t === 8 ? 8 : 10);
 
-function normalizeForMode(){
-  if (state.ui.mode !== "SIMPLE") return;
+  const safeParseJSON = (s, fallback) => {
+    try { return JSON.parse(s); } catch { return fallback; }
+  };
 
-  // 簡単モードでは割引系を無効化（データは残るが計算には使わない）
-  if (state.cartSettings?.totalDiscount){
-    state.cartSettings.totalDiscount.type = "NONE";
-    state.cartSettings.totalDiscount.value = 0;
-    state.cartSettings.totalDiscount.target = "BASE";
-  }
-  state.cart = (state.cart || []).map(it => ({
-    ...it,
-    discountType: "NONE",
-    discountValue: 0,
-  }));
-}
-
-document.getElementById("modeToggle")?.addEventListener("click", () => {
-  sfxClick?.();
-  state.ui.mode = (state.ui.mode === "SIMPLE") ? "PRO" : "SIMPLE";
-  normalizeForMode();
-  saveState?.();
-  applyModeToDom();
-
-  // 画面を更新（関数が存在する前提）
-  try{
-    renderShopSelect?.();
-    renderShopList?.();
-    renderCart?.();
-    renderTotals?.();
-    renderHistory?.();
-  }catch{}
-});
-
-// 起動時に反映
-applyModeToDom();
-normalizeForMode();
-
-// --- SIMPLE: ultra settings ---
-state.ui = state.ui || {};
-state.ui.simple = state.ui.simple || { priceMode: "EXCL", defaultRate: 0.10 };
-
-function isSimpleMode(){
-  return state.ui?.mode === "SIMPLE";
-}
-
-function applySimpleBarUI(){
-  const pmBtn = document.getElementById("simplePriceModeToggle");
-  const b8 = document.getElementById("simpleDefaultRate8");
-  const b10 = document.getElementById("simpleDefaultRate10");
-
-  if (pmBtn){
-    pmBtn.textContent = `価格：${state.ui.simple.priceMode === "INCL" ? "税込" : "税抜"}`;
-  }
-  if (b8){
-    b8.setAttribute("aria-pressed", state.ui.simple.defaultRate === 0.08 ? "true" : "false");
-    b8.disabled = (state.ui.simple.defaultRate === 0.08);
-  }
-  if (b10){
-    b10.setAttribute("aria-pressed", state.ui.simple.defaultRate === 0.10 ? "true" : "false");
-    b10.disabled = (state.ui.simple.defaultRate === 0.10);
-  }
-}
-
-function applySimpleToAllItems(){
-  if (!isSimpleMode()) return;
-  state.cart = (state.cart || []).map(it => ({
-    ...it,
-    priceMode: state.ui.simple.priceMode,
-    discountType: "NONE",
-    discountValue: 0,
-  }));
-}
-
-document.getElementById("simplePriceModeToggle")?.addEventListener("click", () => {
-  sfxClick();
-  state.ui.simple.priceMode = (state.ui.simple.priceMode === "EXCL") ? "INCL" : "EXCL";
-  applySimpleToAllItems();
-  saveState();
-  applySimpleBarUI();
-  renderCart();
-  renderTotals();
-});
-
-document.getElementById("simpleDefaultRate8")?.addEventListener("click", () => {
-  sfxClick();
-  state.ui.simple.defaultRate = 0.08;
-  saveState();
-  applySimpleBarUI();
-});
-
-document.getElementById("simpleDefaultRate10")?.addEventListener("click", () => {
-  sfxClick();
-  state.ui.simple.defaultRate = 0.10;
-  saveState();
-  applySimpleBarUI();
-});
-
-/* ------------------------------
-   サウンド（Web Audio）
--------------------------------- */
-let audio = {
-  ctx: null,
-  master: null,
-  bgmGain: null,
-  sfxGain: null,
-  isReady: false,
-  isPlaying: false,
-  scheduler: null,
-  nodes: []
-};
-
-let soundPrefs = loadSoundPrefs();
-function loadSoundPrefs(){
-  try{
-    const raw = localStorage.getItem(SOUND_KEY);
-    if(!raw) return { bgm:false, sfx:true, volume:0.35 };
-    const s = JSON.parse(raw);
-    return {
-      bgm: !!s.bgm,
-      sfx: (s.sfx !== false),
-      volume: clamp(Number(s.volume ?? 0.35), 0, 1)
+  const debounce = (fn, ms = 200) => {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
     };
-  }catch{
-    return { bgm:false, sfx:true, volume:0.35 };
-  }
-}
-function saveSoundPrefs(){
-  localStorage.setItem(SOUND_KEY, JSON.stringify(soundPrefs));
-}
-
-function ensureAudio(){
-  if (audio.isReady) return;
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-
-  audio.ctx = new Ctx();
-  audio.master = audio.ctx.createGain();
-  audio.bgmGain = audio.ctx.createGain();
-  audio.sfxGain = audio.ctx.createGain();
-
-  audio.master.gain.value = soundPrefs.volume;
-  audio.bgmGain.gain.value = 0.32;
-  audio.sfxGain.gain.value = 0.90;
-
-  audio.bgmGain.connect(audio.master);
-  audio.sfxGain.connect(audio.master);
-  audio.master.connect(audio.ctx.destination);
-
-  audio.isReady = true;
-}
-
-function setMasterVolume(v01){
-  soundPrefs.volume = clamp(v01, 0, 1);
-  saveSoundPrefs();
-  if (audio.master) audio.master.gain.value = soundPrefs.volume;
-}
-
-function sfxClick(){
-  if (!soundPrefs.sfx) return;
-  ensureAudio();
-  if (!audio.isReady) return;
-  if (audio.ctx.state === "suspended") audio.ctx.resume().catch(()=>{});
-
-  const t = audio.ctx.currentTime;
-  const o = audio.ctx.createOscillator();
-  const g = audio.ctx.createGain();
-  o.type = "triangle";
-  o.frequency.setValueAtTime(880, t);
-  o.frequency.exponentialRampToValueAtTime(440, t + 0.07);
-
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.12, t + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.10);
-
-  o.connect(g);
-  g.connect(audio.sfxGain);
-  o.start(t);
-  o.stop(t + 0.12);
-}
-
-function startBgm(){
-  ensureAudio();
-  if (!audio.isReady) return;
-  if (audio.isPlaying) return;
-
-  if (audio.ctx.state === "suspended") audio.ctx.resume().catch(()=>{});
-
-  const filter = audio.ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = 1200;
-  filter.Q.value = 0.8;
-
-  filter.connect(audio.bgmGain);
-
-  const tempo = 78;
-  const stepSec = 60 / tempo * 2;
-
-  const chords = [
-    [220.00, 261.63, 329.63],
-    [196.00, 246.94, 293.66],
-    [174.61, 220.00, 261.63],
-    [196.00, 246.94, 293.66],
-  ];
-
-  function playChord(freqs, time){
-    freqs.forEach((f, i) => {
-      const o = audio.ctx.createOscillator();
-      const g = audio.ctx.createGain();
-      o.type = (i === 0) ? "sine" : "triangle";
-      o.frequency.setValueAtTime(f, time);
-
-      g.gain.setValueAtTime(0.0001, time);
-      g.gain.exponentialRampToValueAtTime(0.10, time + 0.12);
-      g.gain.exponentialRampToValueAtTime(0.0001, time + stepSec * 0.95);
-
-      const lfo = audio.ctx.createOscillator();
-      const lfoG = audio.ctx.createGain();
-      lfo.type = "sine";
-      lfo.frequency.setValueAtTime(0.15 + i*0.03, time);
-      lfoG.gain.setValueAtTime(2.5, time);
-      lfo.connect(lfoG);
-      lfoG.connect(o.frequency);
-
-      o.connect(g);
-      g.connect(filter);
-
-      o.start(time);
-      o.stop(time + stepSec * 0.98);
-      lfo.start(time);
-      lfo.stop(time + stepSec * 0.98);
-
-      audio.nodes.push(o, g, lfo, lfoG);
-    });
-
-    const bell = audio.ctx.createOscillator();
-    const bellG = audio.ctx.createGain();
-    bell.type = "sine";
-    bell.frequency.setValueAtTime(freqs[2] * 2, time + 0.02);
-    bellG.gain.setValueAtTime(0.0001, time);
-    bellG.gain.exponentialRampToValueAtTime(0.06, time + 0.03);
-    bellG.gain.exponentialRampToValueAtTime(0.0001, time + 0.25);
-    bell.connect(bellG);
-    bellG.connect(filter);
-    bell.start(time);
-    bell.stop(time + 0.28);
-    audio.nodes.push(bell, bellG);
-  }
-
-  let idx = 0;
-  const scheduleAhead = 0.25;
-
-  audio.scheduler = setInterval(() => {
-    const now = audio.ctx.currentTime;
-    const t = now + scheduleAhead;
-    const chord = chords[idx % chords.length];
-    playChord(chord, t);
-    idx++;
-  }, stepSec * 1000);
-
-  audio.isPlaying = true;
-}
-
-function stopBgm(){
-  if (audio.scheduler) clearInterval(audio.scheduler);
-  audio.scheduler = null;
-
-  audio.nodes.forEach(n => {
-    try{
-      if (n.stop) n.stop();
-      if (n.disconnect) n.disconnect();
-    }catch{}
-  });
-  audio.nodes = [];
-  audio.isPlaying = false;
-}
-
-/* ------------------------------
-   計算ロジック
--------------------------------- */
-function inclToBase(priceIncl, rate){ return priceIncl / (1 + rate); }
-
-function itemBaseBeforeDiscount(item, shopPolicy){
-  const rate = Number(item.rate);
-  const qty = Math.max(1, safeInt(item.qty, 1));
-  const price = Math.max(0, safeNum(item.price, 0));
-  const mode = item.priceMode || "EXCL";
-
-  let base = (mode === "INCL") ? inclToBase(price, rate) : price;
-
-  const r = shopPolicy.inclToBaseRounding || "NONE";
-  if (mode === "INCL" && r !== "NONE"){
-    base = roundTo(base, r, 1);
-  }
-  return Math.max(0, base * qty);
-}
-
-function applyLineDiscount(base, item){
-  const type = item.discountType || "NONE";
-  const valueRaw = safeNum(item.discountValue, 0);
-
-  if (type === "PERCENT"){
-    const p = clamp(valueRaw, 0, 100);
-    return Math.max(0, base * (1 - p / 100));
-  }
-  if (type === "YEN"){
-    const y = Math.max(0, valueRaw);
-    return Math.max(0, base - y);
-  }
-  return Math.max(0, base);
-}
-
-function applyTotalDiscountToBases(basesByItem, totalDiscount){
-  const { type, value } = totalDiscount;
-  const v = safeNum(value, 0);
-
-  if (type === "PERCENT"){
-    const p = clamp(v, 0, 100);
-    const f = (1 - p / 100);
-    return basesByItem.map(x => ({ ...x, base: Math.max(0, x.base * f) }));
-  }
-
-  if (type === "YEN"){
-    let discount = Math.max(0, v);
-    const totalBase = basesByItem.reduce((a, b) => a + b.base, 0);
-    if (totalBase <= 0) return basesByItem;
-
-    if (discount >= totalBase){
-      return basesByItem.map(x => ({ ...x, base: 0 }));
-    }
-
-    const out = basesByItem.map(x => ({ ...x }));
-    let allocated = 0;
-
-    for (let i = 0; i < out.length; i++){
-      if (i === out.length - 1) break;
-      const share = out[i].base / totalBase;
-      const d = discount * share;
-      const newBase = Math.max(0, out[i].base - d);
-      allocated += (out[i].base - newBase);
-      out[i].base = newBase;
-    }
-
-    const last = out[out.length - 1];
-    const remain = Math.max(0, discount - allocated);
-    last.base = Math.max(0, last.base - remain);
-
-    return out;
-  }
-
-  return basesByItem;
-}
-
-function computeTotalsByPolicy(itemsWithBases, shop){
-  const policy = shop.policy;
-  const method = policy.roundingMethod;
-  const unit = Number(policy.roundingUnit) || 1;
-  const aggregation = policy.aggregation;
-
-  if (aggregation === "ITEM_ROUND"){
-    let subtotal = 0;
-    let total = 0;
-
-    for (const it of itemsWithBases){
-      const rate = Number(it.rate);
-      const base = Math.max(0, it.base);
-
-      const baseRounded = roundTo(base, method, unit);
-      const totalRounded = roundTo(base * (1 + rate), method, unit);
-
-      subtotal += baseRounded;
-      total += totalRounded;
-    }
-
-    const tax = Math.max(0, total - subtotal);
-    return { subtotal, tax, total };
-  }
-
-  const baseByRate = new Map();
-  for (const it of itemsWithBases){
-    const rate = Number(it.rate);
-    baseByRate.set(rate, (baseByRate.get(rate) ?? 0) + Math.max(0, it.base));
-  }
-
-  let subtotal = 0;
-  let total = 0;
-
-  for (const [rate, baseSum] of baseByRate.entries()){
-    const baseRounded = roundTo(baseSum, method, unit);
-    const totalRounded = roundTo(baseSum * (1 + rate), method, unit);
-    subtotal += baseRounded;
-    total += totalRounded;
-  }
-
-  const tax = Math.max(0, total - subtotal);
-  return { subtotal, tax, total };
-}
-
-function policyNote(shop){
-  const p = shop.policy;
-  const agg = p.aggregation === "ITEM_ROUND" ? "商品ごとに丸めます。" : "税率ごとにまとめて丸めます。";
-  const rm = p.roundingMethod === "FLOOR" ? "切り捨てします。" : p.roundingMethod === "CEIL" ? "切り上げします。" : "四捨五入します。";
-  const unit = `${p.roundingUnit}円単位`;
-  const incl = p.inclToBaseRounding === "NONE" ? "丸めません。" :
-    p.inclToBaseRounding === "FLOOR" ? "切り捨てします。" :
-    p.inclToBaseRounding === "CEIL" ? "切り上げします。" : "四捨五入します。";
-  return `計算方式：${agg}　端数：${rm}（${unit}）　税込→税抜：${incl}　`;
-}
-
-function computeTransaction(shop, cart, cartSettings){
-  if (!shop) {
-    return { ok:false, note:"店が未登録のため、計算できません。", subtotal:0, tax:0, totalBeforeDiscount:0, discountAmount:0, payTotal:0 };
-  }
-  if (!cart || cart.length === 0){
-    return { ok:false, note:"商品が未入力です。", subtotal:0, tax:0, totalBeforeDiscount:0, discountAmount:0, payTotal:0 };
-  }
-
-  const enabledRates = new Set(shop.ratesEnabled.filter(Boolean));
-  const normalized = cart.map(it => {
-    const rate = Number(it.rate);
-    const fixedRate = enabledRates.has(rate) ? rate : (shop.ratesEnabled[0] ?? 0.10);
-    return { ...it, rate: fixedRate };
-  });
-
-  const basesByItem = normalized.map(it => {
-    const base0 = itemBaseBeforeDiscount(it, shop.policy);
-    const base1 = applyLineDiscount(base0, it);
-    return { id: it.id, rate:Number(it.rate), base: base1, original: it };
-  });
-
-  const totalsBefore = computeTotalsByPolicy(basesByItem, shop);
-
-  const td = cartSettings?.totalDiscount ?? { type:"NONE", value:0, target:"BASE" };
-  const type = td.type || "NONE";
-  const target = td.target || "BASE";
-  const value = safeNum(td.value, 0);
-
-  let subtotal = totalsBefore.subtotal;
-  let tax = totalsBefore.tax;
-  let totalBeforeDiscount = totalsBefore.total;
-  let discountAmount = 0;
-  let payTotal = totalBeforeDiscount;
-  let note = "";
-
-  if (type === "NONE" || value <= 0){
-    note = policyNote(shop);
-    return { ok:true, note, subtotal, tax, totalBeforeDiscount, discountAmount:0, payTotal: totalBeforeDiscount };
-  }
-
-  if (target === "BASE"){
-    const adjusted = applyTotalDiscountToBases(basesByItem, { type, value });
-    const totalsAfter = computeTotalsByPolicy(adjusted, shop);
-    subtotal = totalsAfter.subtotal;
-    tax = totalsAfter.tax;
-    payTotal = totalsAfter.total;
-    discountAmount = Math.max(0, totalBeforeDiscount - payTotal);
-    note = policyNote(shop) + "合計割引は、税抜合計に適用しています。";
-  } else {
-    let t = totalBeforeDiscount;
-    if (type === "PERCENT"){
-      const p = clamp(value, 0, 100);
-      t = Math.max(0, t * (1 - p / 100));
-      t = roundTo(t, shop.policy.roundingMethod, 1);
-    } else if (type === "YEN"){
-      t = Math.max(0, t - Math.max(0, value));
-    }
-    payTotal = Math.round(t);
-    discountAmount = Math.max(0, totalBeforeDiscount - payTotal);
-    note = policyNote(shop) + "合計割引は、税込合計に適用しています。税額は参考値です。";
-  }
-
-  return { ok:true, note, subtotal, tax, totalBeforeDiscount, discountAmount, payTotal };
-}
-
-/* ------------------------------
-   UI：画面切替・タブ下線
--------------------------------- */
-function setScreen(name){
-  document.querySelectorAll(".screen").forEach(s => s.classList.remove("is-active","enter"));
-  const target = document.querySelector(`#screen-${name}`);
-  target?.classList.add("is-active","enter");
-
-  document.querySelectorAll(".tab").forEach(t => t.classList.remove("is-active"));
-  const tab = document.querySelector(`.tab[data-screen="${name}"]`);
-  tab?.classList.add("is-active");
-
-  requestAnimationFrame(() => moveUnderline(tab));
-}
-
-function moveUnderline(tab){
-  const ul = document.querySelector(".tab-underline");
-  if (!ul || !tab) return;
-  const tabs = document.querySelector(".tabs");
-  if (!tabs) return;
-  const r1 = tabs.getBoundingClientRect();
-  const r2 = tab.getBoundingClientRect();
-  const x = r2.left - r1.left;
-  ul.style.transform = `translateX(${x}px)`;
-  ul.style.width = `${r2.width}px`;
-}
-
-/* ------------------------------
-   UI：店
--------------------------------- */
-function getSelectedShop(){
-  return state.shops.find(s => s.id === state.selectedShopId) ?? null;
-}
-
-function renderShopSelect(){
-  const sel = $("shopSelect");
-  sel.innerHTML = "";
-
-  if (state.shops.length === 0){
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "店が未登録です";
-    sel.appendChild(opt);
-    sel.disabled = true;
-    $("policySummary").textContent = "—";
-    $("shopMemoView").textContent = "「店」タブで店プロフィールを登録してください。";
-    return;
-  }
-
-  sel.disabled = false;
-  for (const shop of state.shops){
-    const opt = document.createElement("option");
-    opt.value = shop.id;
-    opt.textContent = shop.name;
-    sel.appendChild(opt);
-  }
-
-  if (!state.selectedShopId || !state.shops.some(s => s.id === state.selectedShopId)){
-    state.selectedShopId = state.shops[0].id;
-    saveState();
-  }
-  sel.value = state.selectedShopId;
-
-  const shop = getSelectedShop();
-  $("policySummary").textContent = policyNote(shop).trim();
-  $("shopMemoView").textContent = shop.memo ? `メモ：${shop.memo}` : "";
-}
-
-function applyPresetToForm(preset){
-  if (preset === "PRESET_RATE_GROUP"){
-    $("aggregation").value = "RATE_GROUP_ROUND";
-    $("roundingMethod").value = "ROUND";
-    $("roundingUnit").value = "1";
-    $("inclToBaseRounding").value = "NONE";
-    return;
-  }
-  if (preset === "PRESET_ITEM_ROUND"){
-    $("aggregation").value = "ITEM_ROUND";
-    $("roundingMethod").value = "FLOOR";
-    $("roundingUnit").value = "1";
-    $("inclToBaseRounding").value = "NONE";
-  }
-}
-
-function readShopForm(){
-  const name = $("shopName").value.trim();
-  const memo = $("shopMemo").value.trim();
-  const rate8 = $("rate8").checked;
-  const rate10 = $("rate10").checked;
-
-  const enabled = [];
-  if (rate8) enabled.push(0.08);
-  if (rate10) enabled.push(0.10);
-  if (enabled.length === 0){
-    enabled.push(0.10);
-    $("rate10").checked = true;
-  }
-
-  const preset = $("preset").value;
-  const policy = {
-    aggregation: $("aggregation").value,
-    roundingMethod: $("roundingMethod").value,
-    roundingUnit: Number($("roundingUnit").value) || 1,
-    inclToBaseRounding: $("inclToBaseRounding").value,
   };
-  return { name, memo, preset, policy, ratesEnabled: enabled };
-}
 
-function writeShopForm(shop){
-  $("shopName").value = shop.name;
-  $("shopMemo").value = shop.memo || "";
-  $("rate8").checked = shop.ratesEnabled.includes(0.08);
-  $("rate10").checked = shop.ratesEnabled.includes(0.10);
+  // rounding
+  const applyRounding = (value, mode = "round", roundTo = 1) => {
+    const rt = Math.max(1, Number(roundTo) || 1);
+    const scaled = value / rt;
+    let r;
+    if (mode === "floor") r = Math.floor(scaled);
+    else if (mode === "ceil") r = Math.ceil(scaled);
+    else r = Math.round(scaled);
+    return r * rt;
+  };
 
-  $("preset").value = shop.preset || "CUSTOM";
-  $("aggregation").value = shop.policy.aggregation;
-  $("roundingMethod").value = shop.policy.roundingMethod;
-  $("roundingUnit").value = String(shop.policy.roundingUnit ?? 1);
-  $("inclToBaseRounding").value = shop.policy.inclToBaseRounding ?? "NONE";
-}
+  // tax calc helpers
+  const calcTaxFromBase = (base, taxRate, taxRounding = "round", roundTo = 1) => {
+    const t = (base * taxRate) / 100;
+    return applyRounding(t, taxRounding, roundTo);
+  };
 
-function resetShopForm(){
-  state.ui.shopEditingId = null;
-  saveState();
+  const baseFromInclusive = (incl, taxRate, inclToBaseRounding = "round", roundTo = 1) => {
+    const baseRaw = incl / (1 + taxRate / 100);
+    return applyRounding(baseRaw, inclToBaseRounding, roundTo);
+  };
 
-  $("shopName").value = "";
-  $("shopMemo").value = "";
-  $("rate8").checked = true;
-  $("rate10").checked = true;
+  // ========= Storage =========
+  const STORAGE_KEY = "mitti_shophelper_v1";
+  const DEFAULT_STATE = {
+    mode: "simple", // simple | advanced
+    simpleTaxRate: 10,
+    shops: [],
+    currentShopId: null,
+    cart: [],
+    history: []
+  };
 
-  $("preset").value = "PRESET_ITEM_ROUND";
-  applyPresetToForm("PRESET_ITEM_ROUND");
+  const loadState = () => {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return structuredClone(DEFAULT_STATE);
+    const st = safeParseJSON(raw, structuredClone(DEFAULT_STATE));
+    // migrate/sanitize
+    if (!Array.isArray(st.shops)) st.shops = [];
+    if (!Array.isArray(st.cart)) st.cart = [];
+    if (!Array.isArray(st.history)) st.history = [];
+    if (st.mode !== "advanced") st.mode = "simple";
+    st.simpleTaxRate = clampTax(st.simpleTaxRate);
+    return st;
+  };
 
-  $("saveShop").textContent = "登録";
-  $("cancelEdit").classList.add("is-hidden");
-}
+  const saveStateUnsafe = (st) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
+  };
 
-function renderShopList(){
-  const wrap = $("shopList");
-  wrap.innerHTML = "";
-
-  if (state.shops.length === 0){
-    wrap.innerHTML = `<div class="muted">店が未登録です。上のフォームから登録してください。</div>`;
-    return;
-  }
-
-  for (const shop of state.shops){
-    const div = document.createElement("div");
-    div.className = "list-item";
-
-    const ratesTxt = shop.ratesEnabled.map(r => `${Math.round(r*100)}%`).join(" / ");
-    const pTxt = policyNote(shop).trim();
-
-    div.innerHTML = `
-      <div class="list-top">
-        <div>
-          <strong>${escapeHtml(shop.name)}</strong>
-          <div class="list-meta">税率：${escapeHtml(ratesTxt)}\n${escapeHtml(pTxt)}${shop.memo ? `\nメモ：${escapeHtml(shop.memo)}` : ""}</div>
-        </div>
-        <div class="row wrap">
-          <button class="btn ghost" data-act="use" type="button">使う</button>
-          <button class="btn ghost" data-act="edit" type="button">編集</button>
-          <button class="btn danger" data-act="del" type="button">削除</button>
-        </div>
-      </div>
-    `;
-
-    div.querySelector('[data-act="use"]').addEventListener("click", () => {
-      sfxClick();
-      state.selectedShopId = shop.id;
-      saveState();
-      renderShopSelect();
-      renderCart();
-      renderTotals();
-      setScreen("calc");
-    });
-
-    div.querySelector('[data-act="edit"]').addEventListener("click", () => {
-      sfxClick();
-      state.ui.shopEditingId = shop.id;
-      saveState();
-      writeShopForm(shop);
-      $("saveShop").textContent = "更新";
-      $("cancelEdit").classList.remove("is-hidden");
-      setScreen("shops");
-    });
-
-    div.querySelector('[data-act="del"]').addEventListener("click", () => {
-      sfxClick();
-      if (!confirm("この店プロフィールを削除しますか？")) return;
-      state.shops = state.shops.filter(s => s.id !== shop.id);
-      if (state.selectedShopId === shop.id){
-        state.selectedShopId = state.shops[0]?.id ?? null;
+  let storageWarned = false;
+  const saveState = (st) => {
+    try {
+      saveStateUnsafe(st);
+    } catch (e) {
+      if (!storageWarned) {
+        storageWarned = true;
+        alert("保存領域の都合でデータ保存に失敗しました。履歴が保存できない場合があります。不要な履歴を削除してから再度お試しください。");
       }
-      saveState();
-      renderShopSelect();
-      renderShopList();
-      renderTotals();
-    });
-
-    wrap.appendChild(div);
-  }
-}
-
-/* ------------------------------
-   UI：カート
--------------------------------- */
-function defaultItem(rate = 0.10){
-  return {
-    id: uuid(),
-    name: "",
-    price: 0,
-    priceMode: "EXCL",
-    rate: rate,
-    qty: 1,
-    discountType: "NONE",
-    discountValue: 0,
+    }
   };
-}
+  const saveStateDebounced = debounce(saveState, 200);
 
-function renderCart(){
-  const wrap = $("itemList");
-  wrap.innerHTML = "";
+  // ========= Defaults =========
+  const defaultShops = () => ([
+    {
+      id: "shop-default",
+      name: "（未設定）",
+      preset: "item_tax_each",
+      rounding: "round",
+      roundTo: 1,
+      taxRounding: "round",
+      inclToBaseRounding: "round",
+    }
+  ]);
 
-  const shop = getSelectedShop();
-  const enabledRates = shop ? shop.ratesEnabled : [0.10];
+  const ensureAtLeastOneShop = (st) => {
+    if (st.shops.length === 0) {
+      st.shops = defaultShops();
+      st.currentShopId = st.shops[0].id;
+    } else if (!st.currentShopId || !st.shops.some(s => s.id === st.currentShopId)) {
+      st.currentShopId = st.shops[0].id;
+    }
+  };
 
-  if (state.cart.length === 0){
-    wrap.innerHTML = `<div class="muted">商品が未入力です。「商品追加」から入力してください。</div>`;
-    return;
-  }
+  const getCurrentShop = (st) => st.shops.find(s => s.id === st.currentShopId) || st.shops[0];
 
-  for (const item of state.cart){
-    const div = document.createElement("div");
-    div.className = "item";
+  const cloneShopSnapshot = (shop) => ({
+    id: shop.id,
+    name: shop.name,
+    preset: shop.preset,
+    rounding: shop.rounding,
+    roundTo: shop.roundTo,
+    taxRounding: shop.taxRounding,
+    inclToBaseRounding: shop.inclToBaseRounding
+  });
 
-    const title = item.name?.trim() ? item.name.trim() : "（名称未入力）";
+  // ========= State =========
+  const state = loadState();
+  ensureAtLeastOneShop(state);
 
-    div.innerHTML = `
-      <div class="item-head">
-        <div class="item-title">${escapeHtml(title)}</div>
-        <div class="item-actions">
-          <button class="icon-btn" title="この商品を削除" type="button">×</button>
-        </div>
-      </div>
+  // ========= DOM =========
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-      <div class="item-grid">
-        <label class="field">
-          <span>商品名</span>
-          <input data-k="name" value="${escapeAttr(item.name ?? "")}" placeholder="例：牛乳" />
-        </label>
+  const screens = {
+    calc: $("#screen-calc"),
+    shops: $("#screen-shops"),
+    history: $("#screen-history"),
+    help: $("#screen-help")
+  };
 
-        <label class="field">
-          <span>価格（円）</span>
-          <input data-k="price" inputmode="numeric" value="${escapeAttr(String(item.price ?? ""))}" placeholder="0" />
-        </label>
+  const tabButtons = $$(".tab");
+  const underline = $(".tab-underline");
 
-        <label class="field">
-          <span>数量</span>
-          <input data-k="qty" inputmode="numeric" value="${escapeAttr(String(item.qty ?? 1))}" placeholder="1" />
-        </label>
+  const modePill = $("#modePill");
+  const toggleModeBtn = $("#toggleModeBtn");
+  const shopSelect = $("#shopSelect");
+  const openShopBtn = $("#openShopBtn");
 
-        <label class="field">
-          <span>価格の種類</span>
-          <select data-k="priceMode">
-            <option value="EXCL">税抜</option>
-            <option value="INCL">税込</option>
+  const simpleBar = $("#simpleBar");
+  const cartArea = $("#cartArea");
+  const addItemBtn = $("#addItemBtn");
+  const clearCartBtn = $("#clearCartBtn");
+  const saveHistoryBtn = $("#saveHistoryBtn");
+
+  const sumBase = $("#sumBase");
+  const sumTax = $("#sumTax");
+  const sumIncl = $("#sumIncl");
+
+  const discountPanel = $("#discountPanel");
+  const verifyPanel = $("#verifyPanel");
+
+  // shops screen
+  const shopsList = $("#shopsList");
+  const newShopBtn = $("#newShopBtn");
+  const deleteShopBtn = $("#deleteShopBtn");
+  const exportShopsBtn = $("#exportShopsBtn");
+  const importShopsInput = $("#importShopsInput");
+
+  const shopName = $("#shopName");
+  const shopPreset = $("#shopPreset");
+  const shopRounding = $("#shopRounding");
+  const shopRoundTo = $("#shopRoundTo");
+  const shopTaxRounding = $("#shopTaxRounding");
+  const shopInclToBase = $("#shopInclToBase");
+  const saveShopBtn = $("#saveShopBtn");
+  const setAsCurrentBtn = $("#setAsCurrentBtn");
+
+  // history
+  const historyList = $("#historyList");
+  const clearHistoryBtn = $("#clearHistoryBtn");
+
+  // ========= Tabs =========
+  const showScreen = (id) => {
+    $$(".screen").forEach(s => s.classList.remove("is-active"));
+    tabButtons.forEach(t => t.classList.remove("is-active"));
+    const screen = document.getElementById(id);
+    if (screen) screen.classList.add("is-active");
+    const btn = tabButtons.find(b => b.dataset.screen === id);
+    if (btn) {
+      btn.classList.add("is-active");
+      btn.setAttribute("aria-current", "page");
+      tabButtons.filter(b => b !== btn).forEach(b => b.removeAttribute("aria-current"));
+      moveUnderline(btn);
+    }
+  };
+
+  const moveUnderline = (btn) => {
+    if (!btn || !underline) return;
+    const rect = btn.getBoundingClientRect();
+    const parentRect = btn.parentElement.getBoundingClientRect();
+    underline.style.width = `${rect.width}px`;
+    underline.style.transform = `translateX(${rect.left - parentRect.left}px)`;
+  };
+
+  tabButtons.forEach(btn => {
+    btn.addEventListener("click", () => showScreen(btn.dataset.screen));
+  });
+
+  window.addEventListener("resize", () => {
+    const active = tabButtons.find(t => t.classList.contains("is-active"));
+    if (active) moveUnderline(active);
+  });
+
+  // ========= Mode =========
+  const setMode = (m) => {
+    state.mode = (m === "advanced") ? "advanced" : "simple";
+    modePill.textContent = `モード：${state.mode === "advanced" ? "詳細" : "簡単"}`;
+    saveStateDebounced(state);
+    renderAll();
+  };
+
+  toggleModeBtn.addEventListener("click", () => {
+    setMode(state.mode === "advanced" ? "simple" : "advanced");
+  });
+
+  // ========= Shops =========
+  const renderShopSelects = () => {
+    ensureAtLeastOneShop(state);
+    const opts = state.shops.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join("");
+    shopSelect.innerHTML = opts;
+    shopsList.innerHTML = opts;
+    shopSelect.value = state.currentShopId;
+    shopsList.value = state.currentShopId;
+  };
+
+  shopSelect.addEventListener("change", () => {
+    state.currentShopId = shopSelect.value;
+    saveStateDebounced(state);
+    renderAll();
+  });
+
+  openShopBtn.addEventListener("click", () => {
+    showScreen("screen-shops");
+    shopsList.value = state.currentShopId;
+    loadShopForm(shopsList.value);
+  });
+
+  const loadShopForm = (shopId) => {
+    const s = state.shops.find(x => x.id === shopId);
+    if (!s) return;
+    shopName.value = s.name || "";
+    shopPreset.value = s.preset || "item_tax_each";
+    shopRounding.value = s.rounding || "round";
+    shopRoundTo.value = String(s.roundTo ?? 1);
+    shopTaxRounding.value = s.taxRounding || "round";
+    shopInclToBase.value = s.inclToBaseRounding || "round";
+  };
+
+  shopsList.addEventListener("change", () => {
+    loadShopForm(shopsList.value);
+  });
+
+  newShopBtn.addEventListener("click", () => {
+    const s = {
+      id: `shop-${uid()}`,
+      name: "新しい店",
+      preset: "item_tax_each",
+      rounding: "round",
+      roundTo: 1,
+      taxRounding: "round",
+      inclToBaseRounding: "round",
+    };
+    state.shops.unshift(s);
+    state.currentShopId = s.id;
+    saveState(state);
+    renderShopSelects();
+    shopsList.value = s.id;
+    loadShopForm(s.id);
+  });
+
+  deleteShopBtn.addEventListener("click", () => {
+    if (state.shops.length <= 1) {
+      alert("店は最低1つ必要です。");
+      return;
+    }
+    const id = shopsList.value;
+    const s = state.shops.find(x => x.id === id);
+    if (!s) return;
+    if (!confirm(`「${s.name}」を削除しますか？`)) return;
+
+    state.shops = state.shops.filter(x => x.id !== id);
+    if (!state.shops.some(x => x.id === state.currentShopId)) {
+      state.currentShopId = state.shops[0].id;
+    }
+    saveState(state);
+    renderAll();
+  });
+
+  saveShopBtn.addEventListener("click", () => {
+    const id = shopsList.value;
+    const s = state.shops.find(x => x.id === id);
+    if (!s) return;
+    s.name = shopName.value.trim() || "（無名の店）";
+    s.preset = shopPreset.value;
+    s.rounding = shopRounding.value;
+    s.roundTo = Number(shopRoundTo.value) || 1;
+    s.taxRounding = shopTaxRounding.value;
+    s.inclToBaseRounding = shopInclToBase.value;
+    saveState(state);
+    renderAll();
+  });
+
+  setAsCurrentBtn.addEventListener("click", () => {
+    state.currentShopId = shopsList.value;
+    saveState(state);
+    showScreen("screen-calc");
+    renderAll();
+  });
+
+  exportShopsBtn.addEventListener("click", () => {
+    const data = {
+      version: "1.0.3",
+      exportedAt: new Date().toISOString(),
+      shops: state.shops
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "mitti_shops_export.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  importShopsInput.addEventListener("change", async () => {
+    const file = importShopsInput.files && importShopsInput.files[0];
+    if (!file) return;
+    try {
+      const txt = await file.text();
+      const data = safeParseJSON(txt, null);
+      if (!data || !Array.isArray(data.shops)) throw new Error("invalid");
+      // minimal sanitize
+      const imported = data.shops.map(s => ({
+        id: s.id || `shop-${uid()}`,
+        name: String(s.name || "（無名の店）"),
+        preset: s.preset || "item_tax_each",
+        rounding: s.rounding || "round",
+        roundTo: Number(s.roundTo) || 1,
+        taxRounding: s.taxRounding || "round",
+        inclToBaseRounding: s.inclToBaseRounding || "round"
+      }));
+      if (imported.length === 0) throw new Error("empty");
+      state.shops = imported;
+      state.currentShopId = imported[0].id;
+      saveState(state);
+      renderAll();
+      alert("インポートしました。");
+    } catch (e) {
+      alert("インポートに失敗しました。ファイル形式をご確認ください。");
+    } finally {
+      importShopsInput.value = "";
+    }
+  });
+
+  // ========= Cart =========
+  const newItem = () => ({
+    id: `item-${uid()}`,
+    name: "",
+    priceStr: "",
+    taxRate: state.mode === "simple" ? state.simpleTaxRate : 10,
+    priceMode: "base", // base | incl (advanced)
+    lineDiscount: { type: "none", value: 0 } // none | percent | yen
+  });
+
+  const ensureCartAtLeastOne = () => {
+    if (state.cart.length === 0) state.cart.push(newItem());
+  };
+
+  addItemBtn.addEventListener("click", () => {
+    state.cart.push(newItem());
+    saveStateDebounced(state);
+    renderCart();
+    recalcTotals();
+  });
+
+  clearCartBtn.addEventListener("click", () => {
+    if (!confirm("入力をクリアしますか？")) return;
+    state.cart = [];
+    ensureCartAtLeastOne();
+    saveState(state);
+    renderAll();
+  });
+
+  // simple tax buttons
+  $$("#simpleBar .seg").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const t = clampTax(Number(btn.dataset.simpleTax));
+      state.simpleTaxRate = t;
+      state.cart.forEach(it => { it.taxRate = t; });
+      $$("#simpleBar .seg").forEach(b => b.classList.toggle("is-on", b === btn));
+      saveStateDebounced(state);
+      recalcTotals();
+    });
+  });
+
+  // ========= Discounts (advanced) =========
+  const defaultTotalDiscount = () => ({ enabled: false, target: "incl", type: "none", value: 0 });
+
+  const ensureDiscountState = (st) => {
+    if (!st.totalDiscount) st.totalDiscount = defaultTotalDiscount();
+    if (!st.verify) st.verify = { receiptTotalStr: "" };
+  };
+  ensureDiscountState(state);
+
+  const renderDiscountPanel = () => {
+    if (state.mode !== "advanced") {
+      discountPanel.innerHTML = "";
+      return;
+    }
+    const d = state.totalDiscount || defaultTotalDiscount();
+    discountPanel.innerHTML = `
+      <div class="card" style="margin-top:12px;">
+        <h2>割引・クーポン（合計）</h2>
+        <div class="row wrap" style="margin-top:10px;">
+          <label class="row" style="gap:8px;">
+            <input id="tdEnabled" type="checkbox" ${d.enabled ? "checked" : ""}>
+            <span class="muted">有効</span>
+          </label>
+
+          <select id="tdTarget" class="input" style="max-width:220px;">
+            <option value="incl" ${d.target === "incl" ? "selected" : ""}>税込合計に適用</option>
+            <option value="base" ${d.target === "base" ? "selected" : ""}>税抜合計に適用</option>
           </select>
-        </label>
 
-        <label class="field">
-          <span>税率</span>
-          <select data-k="rate"></select>
-        </label>
-
-        <label class="field">
-          <span>行割引</span>
-          <select data-k="discountType">
-            <option value="NONE">なし</option>
-            <option value="PERCENT">％引き</option>
-            <option value="YEN">円引き</option>
+          <select id="tdType" class="input" style="max-width:220px;">
+            <option value="none" ${d.type === "none" ? "selected" : ""}>なし</option>
+            <option value="percent" ${d.type === "percent" ? "selected" : ""}>%引き</option>
+            <option value="yen" ${d.type === "yen" ? "selected" : ""}>円引き</option>
           </select>
-        </label>
-      </div>
 
-      <div class="item-grid2">
-        <label class="field">
-          <span>行割引の値</span>
-          <input data-k="discountValue" inputmode="numeric" value="${escapeAttr(String(item.discountValue ?? ""))}" placeholder="例：5（％） または 100（円）" />
-        </label>
-
-        <div class="note">
-          <div class="note-title">行割引の説明</div>
-          <div class="note-body">行割引は、税抜金額（数量を反映した行合計）に対して適用します。</div>
+          <input id="tdValue" class="input" style="max-width:220px;" inputmode="numeric" placeholder="値" value="${escapeHtml(String(d.value ?? ""))}">
         </div>
+        <p class="muted" style="margin-top:10px; line-height:1.5;">
+          合計割引は、計算の最後にまとめて適用します。割引後の端数処理は、店の丸め設定に従います。
+        </p>
       </div>
     `;
 
-    const priceModeSel = div.querySelector('select[data-k="priceMode"]');
-    priceModeSel.value = item.priceMode || "EXCL";
+    const enabled = $("#tdEnabled");
+    const target = $("#tdTarget");
+    const type = $("#tdType");
+    const value = $("#tdValue");
 
-    const rateSel = div.querySelector('select[data-k="rate"]');
-    rateSel.innerHTML = "";
-    for (const r of TAX_RATES){
-      if (!enabledRates.includes(r.value)) continue;
-      const opt = document.createElement("option");
-      opt.value = String(r.value);
-      opt.textContent = r.label;
-      rateSel.appendChild(opt);
+    const sync = () => {
+      state.totalDiscount.enabled = enabled.checked;
+      state.totalDiscount.target = target.value;
+      state.totalDiscount.type = type.value;
+      state.totalDiscount.value = Number(value.value) || 0;
+      saveStateDebounced(state);
+      recalcTotals();
+    };
+
+    enabled.addEventListener("change", sync);
+    target.addEventListener("change", sync);
+    type.addEventListener("change", sync);
+    value.addEventListener("input", sync);
+  };
+
+  // ========= Verify =========
+  const renderVerifyPanel = () => {
+    if (state.mode !== "advanced") {
+      verifyPanel.innerHTML = "";
+      return;
     }
-    if (!enabledRates.includes(Number(item.rate))){
-      item.rate = enabledRates[0] ?? 0.10;
-      saveState();
+    const v = state.verify || { receiptTotalStr: "" };
+    verifyPanel.innerHTML = `
+      <div class="card" style="margin-top:12px;">
+        <h2>レシート検証</h2>
+        <p class="muted" style="margin-top:8px; line-height:1.5;">
+          レシートの「支払合計」を入力して、現在の設定で一致するか確認します。差分がある場合、丸め設定の候補を提示します。
+        </p>
+        <div class="row wrap" style="margin-top:10px;">
+          <input id="receiptTotal" class="input" style="max-width:240px;" inputmode="numeric" placeholder="レシート合計（税込）" value="${escapeHtml(v.receiptTotalStr || "")}">
+          <button id="runVerifyBtn" class="btn btn-primary" type="button">検証開始</button>
+        </div>
+        <div id="verifyResult" style="margin-top:10px;"></div>
+      </div>
+    `;
+
+    $("#receiptTotal").addEventListener("input", (e) => {
+      state.verify.receiptTotalStr = e.target.value;
+      saveStateDebounced(state);
+    });
+
+    $("#runVerifyBtn").addEventListener("click", () => {
+      runVerification();
+    });
+  };
+
+  const runVerification = () => {
+    const receipt = Number(state.verify.receiptTotalStr);
+    const current = Number(sumIncl.dataset.raw || 0);
+    const diff = receipt - current;
+
+    const box = $("#verifyResult");
+    if (!Number.isFinite(receipt) || receipt <= 0) {
+      box.innerHTML = `<div class="note"><div class="note-title">入力をご確認ください</div><div class="note-body">レシート合計を数値で入力してください。</div></div>`;
+      return;
     }
-    rateSel.value = String(item.rate);
 
-    const discTypeSel = div.querySelector('select[data-k="discountType"]');
-    discTypeSel.value = item.discountType || "NONE";
+    if (Math.abs(diff) < 0.5) {
+      box.innerHTML = `<div class="note" style="border-color: rgba(71,255,176,0.28);"><div class="note-title">一致しました</div><div class="note-body">現在の設定で、レシート合計と一致しています。</div></div>`;
+      return;
+    }
 
-    div.querySelectorAll("input, select").forEach(el => {
-      const k = el.dataset.k;
-      if (!k) return;
+    // propose candidates by varying rounding modes / roundTo
+    const shop = getCurrentShop(state);
+    const candidates = [];
 
-      el.addEventListener("input", () => {
-        const target = state.cart.find(c => c.id === item.id);
-        if (!target) return;
+    const roundings = ["round", "floor", "ceil"];
+    const roundTos = [1, 10, 100];
 
-        if (k === "price" || k === "qty" || k === "discountValue" || k === "rate"){
-          if (k === "qty") target[k] = Math.max(1, safeInt(el.value, 1));
-          else if (k === "price") target[k] = Math.max(0, safeNum(el.value, 0));
-          else if (k === "discountValue") target[k] = Math.max(0, safeNum(el.value, 0));
-          else if (k === "rate") target[k] = Number(el.value);
-        } else {
-          target[k] = el.value;
-        }
+    for (const r of roundings) {
+      for (const rt of roundTos) {
+        const tmpShop = { ...shop, rounding: r, roundTo: rt };
+        const totals = computeTotals(state, tmpShop);
+        const d = receipt - totals.incl;
+        candidates.push({ rounding: r, roundTo: rt, incl: totals.incl, diff: d });
+      }
+    }
 
-        // 入力中は再描画しない（フォーカスが飛ぶのを防ぐ）
-        // 状態だけ更新し、合計だけ再計算します。
-        saveStateDebounced();
+    candidates.sort((a,b) => Math.abs(a.diff) - Math.abs(b.diff));
+    const top = candidates.slice(0, 5);
 
-        if (k === "name"){
-          const t = target.name?.trim() ? target.name.trim() : "（名称未入力）";
-          const titleEl = div.querySelector(".item-title");
-          if (titleEl) titleEl.textContent = t;
-        }
+    const fmt = (c) => {
+      const label = `${roundingLabel(c.rounding)} / ${c.roundTo}円`;
+      const diffStr = (c.diff > 0 ? `+${yen(c.diff)}` : `${yen(c.diff)}`);
+      return `
+        <div class="history-item">
+          <div class="history-head">
+            <div class="history-title">${label}</div>
+            <div class="history-meta">差分：${diffStr} 円</div>
+          </div>
+          <div class="history-body">この設定の支払合計：<b>${yen(c.incl)}</b> 円</div>
+          <div class="row wrap" style="margin-top:10px;">
+            <button class="btn btn-secondary applyCandidateBtn" data-rounding="${c.rounding}" data-roundto="${c.roundTo}" type="button">候補を店に適用</button>
+          </div>
+        </div>
+      `;
+    };
 
-        renderTotals();
+    box.innerHTML = `
+      <div class="note" style="border-color: rgba(255,85,122,0.26);">
+        <div class="note-title">一致しませんでした</div>
+        <div class="note-body">
+          現在の計算：${yen(current)} 円 / レシート：${yen(receipt)} 円<br>
+          差分：${diff > 0 ? "+" : ""}${yen(diff)} 円
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        ${top.map(fmt).join("")}
+      </div>
+    `;
+
+    $$(".applyCandidateBtn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const rounding = btn.dataset.rounding;
+        const roundTo = Number(btn.dataset.roundto) || 1;
+        const s = getCurrentShop(state);
+        s.rounding = rounding;
+        s.roundTo = roundTo;
+        saveState(state);
+        renderAll();
+        alert("候補を適用しました。再計算して一致するか確認してください。");
       });
     });
+  };
 
-    div.querySelector(".icon-btn").addEventListener("click", () => {
-      sfxClick();
-      state.cart = state.cart.filter(c => c.id !== item.id);
-      saveState();
-      renderCart();
-      renderTotals();
-    });
+  // ========= History =========
+  const pushHistory = (entry) => {
+    state.history.unshift(entry);
+    // keep reasonable
+    if (state.history.length > 200) state.history.length = 200;
+  };
 
-    wrap.appendChild(div);
-  }
-}
+  saveHistoryBtn.addEventListener("click", () => {
+    const shop = getCurrentShop(state);
+    const totals = computeTotals(state, shop);
+    const entry = {
+      id: `hist-${uid()}`,
+      at: nowStamp(),
+      shopSnapshot: cloneShopSnapshot(shop),
+      mode: state.mode,
+      cart: structuredClone(state.cart),
+      totalDiscount: structuredClone(state.totalDiscount || defaultTotalDiscount()),
+      totals
+    };
+    pushHistory(entry);
+    saveState(state);
+    renderHistory();
+    alert("履歴に保存しました。");
+  });
 
-/* ------------------------------
-   UI：合計
--------------------------------- */
-function syncDiscountUIFromState(){
-  const td = state.cartSettings.totalDiscount;
-  $("totalDiscountType").value = td.type || "NONE";
-  $("totalDiscountValue").value = (td.value ?? 0) ? String(td.value) : "";
-  $("totalDiscountTarget").value = td.target || "BASE";
-}
+  clearHistoryBtn.addEventListener("click", () => {
+    if (!confirm("履歴を全削除しますか？")) return;
+    state.history = [];
+    saveState(state);
+    renderHistory();
+  });
 
-function renderTotals(){
-  const shop = getSelectedShop();
+  // ========= Rendering =========
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, m => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[m]));
 
-  const td = state.cartSettings.totalDiscount;
-  td.type = $("totalDiscountType").value;
-  td.value = safeNum($("totalDiscountValue").value, 0);
-  td.target = $("totalDiscountTarget").value;
-  saveStateDebounced();
+  const roundingLabel = (m) => {
+    if (m === "floor") return "切り捨て";
+    if (m === "ceil") return "切り上げ";
+    return "四捨五入";
+  };
 
-  const res = computeTransaction(shop, state.cart, state.cartSettings);
+  const renderCart = () => {
+    ensureCartAtLeastOne();
 
-  $("subtotal").textContent = yen(res.subtotal);
-  $("tax").textContent = yen(res.tax);
-  $("totalBefore").textContent = yen(res.totalBeforeDiscount);
-  $("discount").textContent = yen(res.discountAmount);
-  $("payTotal").textContent = yen(res.payTotal);
-  $("calcNote").textContent = res.note;
-}
+    const shop = getCurrentShop(state);
+    const isAdv = state.mode === "advanced";
+    simpleBar.style.display = isAdv ? "none" : "block";
 
-/* ------------------------------
-   履歴
--------------------------------- */
-function renderHistory(){
-  const wrap = $("historyList");
-  wrap.innerHTML = "";
+    cartArea.innerHTML = state.cart.map((it, idx) => {
+      const tax = clampTax(it.taxRate);
+      const title = `商品 ${idx + 1}`;
+      const lineDisc = it.lineDiscount || { type: "none", value: 0 };
 
-  if (state.history.length === 0){
-    wrap.innerHTML = `<div class="muted">履歴がありません。</div>`;
-    return;
-  }
+      const advControls = isAdv ? `
+        <div class="row wrap" style="margin-top:10px;">
+          <span class="tag">税率</span>
+          <button class="seg ${tax===10?"is-on":""}" data-act="setTax" data-id="${it.id}" data-tax="10" type="button">10%</button>
+          <button class="seg ${tax===8?"is-on":""}" data-act="setTax" data-id="${it.id}" data-tax="8" type="button">8%</button>
 
-  for (const h of [...state.history].reverse()){
-    const div = document.createElement("div");
-    div.className = "list-item";
-
-    const dt = new Date(h.at);
-    const dtText = dt.toLocaleString("ja-JP");
-
-    div.innerHTML = `
-      <div class="list-top">
-        <div>
-          <strong>${escapeHtml(h.shopSnapshot?.name ?? "（店情報なし）")}</strong>
-          <div class="list-meta">${escapeHtml(dtText)}</div>
+          <span class="tag">価格</span>
+          <button class="seg ${it.priceMode==="base"?"is-on":""}" data-act="setMode" data-id="${it.id}" data-mode="base" type="button">税抜</button>
+          <button class="seg ${it.priceMode==="incl"?"is-on":""}" data-act="setMode" data-id="${it.id}" data-mode="incl" type="button">税込</button>
         </div>
-        <div style="text-align:right;">
-          <div><strong>${yen(h.result?.payTotal ?? 0)}</strong></div>
-          <div class="list-meta">小計：${yen(h.result?.subtotal ?? 0)}　税額：${yen(h.result?.tax ?? 0)}</div>
+
+        <div class="row wrap" style="margin-top:10px;">
+          <span class="tag">行割引</span>
+          <select class="input" style="max-width:180px;" data-act="lineDiscType" data-id="${it.id}">
+            <option value="none" ${lineDisc.type==="none"?"selected":""}>なし</option>
+            <option value="percent" ${lineDisc.type==="percent"?"selected":""}>%引き</option>
+            <option value="yen" ${lineDisc.type==="yen"?"selected":""}>円引き</option>
+          </select>
+          <input class="input" style="max-width:180px;" inputmode="numeric" placeholder="値" value="${escapeHtml(String(lineDisc.value ?? ""))}" data-act="lineDiscValue" data-id="${it.id}">
         </div>
-      </div>
+      ` : ``;
 
-      <div class="list-meta">商品数：${(h.itemsSnapshot?.length ?? 0)}件　割引：${yen(h.result?.discountAmount ?? 0)}</div>
+      return `
+        <div class="item-card" data-item="${it.id}">
+          <div class="item-top">
+            <span class="tag">${title}</span>
+            <input class="input" style="max-width:220px;" type="text" placeholder="名前（任意）" value="${escapeHtml(it.name || "")}" data-act="name" data-id="${it.id}">
+            <input class="input" style="max-width:220px;" inputmode="numeric" placeholder="価格" value="${escapeHtml(it.priceStr || "")}" data-act="price" data-id="${it.id}">
+            <div class="item-actions">
+              <button class="btn btn-ghost" data-act="dup" data-id="${it.id}" type="button">複製</button>
+              <button class="btn btn-danger" data-act="del" data-id="${it.id}" type="button">削除</button>
+            </div>
+          </div>
+          ${advControls}
+        </div>
+      `;
+    }).join("");
 
-      <div class="row wrap" style="margin-top:10px;">
-        <button class="btn ghost" data-act="detail" type="button">詳細</button>
-        <button class="btn ghost" data-act="load" type="button">読み込む</button>
-        <button class="btn danger" data-act="del" type="button">削除</button>
-      </div>
+    // attach events (event delegation)
+    cartArea.onclick = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      const act = btn.dataset.act;
+      const id = btn.dataset.id;
+      if (!act || !id) return;
 
-      <div class="list-meta" data-detail style="display:none; margin-top:10px;"></div>
-    `;
+      const it = state.cart.find(x => x.id === id);
+      if (!it) return;
 
-    const detail = div.querySelector("[data-detail]");
+      if (act === "del") {
+        if (state.cart.length <= 1) {
+          it.name = "";
+          it.priceStr = "";
+        } else {
+          state.cart = state.cart.filter(x => x.id !== id);
+        }
+        saveStateDebounced(state);
+        renderCart();
+        recalcTotals();
+      }
 
-    div.querySelector('[data-act="detail"]').addEventListener("click", () => {
-      sfxClick();
-      const open = detail.style.display !== "none";
-      if (open){
-        detail.style.display = "none";
+      if (act === "dup") {
+        const copy = structuredClone(it);
+        copy.id = `item-${uid()}`;
+        state.cart.splice(state.cart.indexOf(it) + 1, 0, copy);
+        saveStateDebounced(state);
+        renderCart();
+        recalcTotals();
+      }
+
+      if (act === "setTax") {
+        const t = clampTax(Number(btn.dataset.tax));
+        it.taxRate = t;
+        saveStateDebounced(state);
+        // small UI update: just re-render to update segs (safe for buttons)
+        renderCart();
+        recalcTotals();
+      }
+
+      if (act === "setMode") {
+        const m = btn.dataset.mode === "incl" ? "incl" : "base";
+        it.priceMode = m;
+        saveStateDebounced(state);
+        renderCart();
+        recalcTotals();
+      }
+    };
+
+    cartArea.onchange = (e) => {
+      const el = e.target;
+      const act = el.dataset.act;
+      const id = el.dataset.id;
+      if (!act || !id) return;
+      const it = state.cart.find(x => x.id === id);
+      if (!it) return;
+
+      if (act === "lineDiscType") {
+        it.lineDiscount = it.lineDiscount || { type:"none", value:0 };
+        it.lineDiscount.type = el.value;
+        saveStateDebounced(state);
+        recalcTotals();
+      }
+    };
+
+    // IMPORTANT: price input should not trigger full re-render each keypress
+    cartArea.oninput = (e) => {
+      const el = e.target;
+      const act = el.dataset.act;
+      const id = el.dataset.id;
+      if (!act || !id) return;
+      const it = state.cart.find(x => x.id === id);
+      if (!it) return;
+
+      if (act === "name") {
+        it.name = el.value;
+        saveStateDebounced(state);
         return;
       }
-      detail.style.display = "block";
 
-      const lines = [];
-      lines.push(`計算ルール：${policyNote(h.shopSnapshot).trim()}`);
-      lines.push("商品：");
-      for (const it of (h.itemsSnapshot ?? [])){
-        const rate = `${Math.round(Number(it.rate)*100)}%`;
-        const mode = it.priceMode === "INCL" ? "税込" : "税抜";
-        const disc = (it.discountType && it.discountType !== "NONE")
-          ? ` / 行割引：${it.discountType === "PERCENT" ? `${it.discountValue}%` : `${it.discountValue}円`}`
-          : "";
-        lines.push(`・${it.name || "（名称なし）"}：${it.price}円（${mode}）×${it.qty} / 税率：${rate}${disc}`);
-      }
-      detail.textContent = lines.join("\n");
-    });
-
-    div.querySelector('[data-act="load"]').addEventListener("click", () => {
-      sfxClick();
-      const snap = h.shopSnapshot;
-      if (snap){
-        let shop = state.shops.find(s => s.id === snap.id);
-        if (!shop){
-          shop = { ...snap, id: uuid(), restoredFromHistory: true, createdAt: nowISO(), updatedAt: nowISO() };
-          state.shops.push(shop);
-        }
-        state.selectedShopId = shop.id;
+      if (act === "price") {
+        it.priceStr = el.value;
+        saveStateDebounced(state);
+        recalcTotals(); // recalc only (no re-render)
+        return;
       }
 
-      state.cart = (h.itemsSnapshot ?? []).map(x => ({ ...x, id: uuid() }));
-      state.cartSettings = h.cartSettingsSnapshot ?? state.cartSettings;
-
-      saveState();
-      renderShopSelect();
-      syncDiscountUIFromState();
-      renderCart();
-      renderTotals();
-      setScreen("calc");
-      alert("履歴を読み込みました。");
-    });
-
-    div.querySelector('[data-act="del"]').addEventListener("click", () => {
-      sfxClick();
-      if (!confirm("この履歴を削除しますか？")) return;
-      state.history = state.history.filter(x => x.id !== h.id);
-      saveState();
-      renderHistory();
-    });
-
-    wrap.appendChild(div);
-  }
-}
-
-/* ------------------------------
-   検証（簡易）
--------------------------------- */
-function suggestPoliciesForReceipt(shop, cart, cartSettings, receiptTotal){
-  const receipt = safeInt(receiptTotal, -1);
-  if (receipt < 0) return { matches: [], closest: [] };
-
-  const aggregations = ["ITEM_ROUND", "RATE_GROUP_ROUND"];
-  const methods = ["FLOOR", "ROUND", "CEIL"];
-  const units = [1, 10, 100];
-  const inclRounds = ["NONE", "FLOOR", "ROUND", "CEIL"];
-
-  const candidates = [];
-
-  for (const ag of aggregations){
-    for (const rm of methods){
-      for (const u of units){
-        for (const ir of inclRounds){
-          const tmpShop = {
-            ...shop,
-            policy: { ...shop.policy, aggregation: ag, roundingMethod: rm, roundingUnit: u, inclToBaseRounding: ir }
-          };
-          const res = computeTransaction(tmpShop, cart, cartSettings);
-          const diff = Math.abs(res.payTotal - receipt);
-          candidates.push({ policy: tmpShop.policy, payTotal: res.payTotal, diff });
-        }
+      if (act === "lineDiscValue") {
+        it.lineDiscount = it.lineDiscount || { type:"none", value:0 };
+        it.lineDiscount.value = Number(el.value) || 0;
+        saveStateDebounced(state);
+        recalcTotals();
+        return;
       }
+    };
+  };
+
+  const renderHistory = () => {
+    if (!state.history || state.history.length === 0) {
+      historyList.innerHTML = `<div class="muted">履歴はまだありません。</div>`;
+      return;
     }
-  }
 
-  const matches = candidates.filter(c => c.diff === 0).slice(0, 8);
-  const closest = candidates.sort((a,b)=>a.diff-b.diff).slice(0, 8);
-  return { matches, closest };
-}
+    historyList.innerHTML = state.history.map(h => {
+      const totals = h.totals || { base:0, tax:0, incl:0 };
+      const shop = h.shopSnapshot || { name:"（不明）" };
+      return `
+        <div class="history-item">
+          <div class="history-head">
+            <div class="history-title">${escapeHtml(shop.name)} / ${escapeHtml(h.at || "")}</div>
+            <div class="history-meta">合計：${yen(totals.incl)} 円</div>
+          </div>
+          <div class="history-body">
+            税抜：${yen(totals.base)} 円 / 税：${yen(totals.tax)} 円<br>
+            モード：${h.mode === "advanced" ? "詳細" : "簡単"} / ルール：${presetLabel(shop.preset)}
+          </div>
+          <div class="row wrap" style="margin-top:10px;">
+            <button class="btn btn-ghost" data-hact="restore" data-hid="${h.id}" type="button">この内容を復元</button>
+            <button class="btn btn-danger" data-hact="delete" data-hid="${h.id}" type="button">削除</button>
+          </div>
+        </div>
+      `;
+    }).join("");
 
-function policyShort(p){
-  const ag = p.aggregation === "ITEM_ROUND" ? "商品ごと" : "税率ごと";
-  const rm = p.roundingMethod === "FLOOR" ? "切り捨て" : p.roundingMethod === "CEIL" ? "切り上げ" : "四捨五入";
-  const u = `${p.roundingUnit}円`;
-  const ir = p.inclToBaseRounding === "NONE" ? "なし" :
-    p.inclToBaseRounding === "FLOOR" ? "切り捨て" :
-    p.inclToBaseRounding === "CEIL" ? "切り上げ" : "四捨五入";
-  return `方式：${ag} / 端数：${rm}（${u}）/ 税込→税抜：${ir}`;
-}
+    historyList.onclick = (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      const act = btn.dataset.hact;
+      const hid = btn.dataset.hid;
+      if (!act || !hid) return;
 
-/* ------------------------------
-   エクスポート / インポート
--------------------------------- */
-function exportJson(filename, obj){
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-function handleImportFile(file){
-  const reader = new FileReader();
-  reader.onload = () => {
-    try{
-      const json = JSON.parse(String(reader.result || "{}"));
-      if (json.kind !== "MITTI_SHOPHELPER_EXPORT" || !Array.isArray(json.shops)){
-        alert("インポートできませんでした。ファイル形式を確認してください。");
-        return;
+      const h = state.history.find(x => x.id === hid);
+      if (!h) return;
+
+      if (act === "delete") {
+        if (!confirm("この履歴を削除しますか？")) return;
+        state.history = state.history.filter(x => x.id !== hid);
+        saveState(state);
+        renderHistory();
       }
 
-      const modeReplace = confirm("インポートします。既存の店プロフィールを置き換えますか？\nOK：置き換え / キャンセル：追加");
-      const incoming = json.shops.map(s => normalizeImportedShop(s));
+      if (act === "restore") {
+        if (!confirm("この履歴の内容で入力を復元しますか？")) return;
+        // restore cart + discount + shop (as current)
+        state.cart = structuredClone(h.cart || []);
+        ensureCartAtLeastOne();
+        state.totalDiscount = structuredClone(h.totalDiscount || defaultTotalDiscount());
+        setMode(h.mode === "advanced" ? "advanced" : "simple");
+        // apply shop snapshot as a new shop entry? -> keep current shop, but user may want same rule:
+        // We'll set current shop settings to snapshot (safe & practical)
+        const s = getCurrentShop(state);
+        if (h.shopSnapshot) {
+          s.preset = h.shopSnapshot.preset;
+          s.rounding = h.shopSnapshot.rounding;
+          s.roundTo = h.shopSnapshot.roundTo;
+          s.taxRounding = h.shopSnapshot.taxRounding;
+          s.inclToBaseRounding = h.shopSnapshot.inclToBaseRounding;
+        }
+        saveState(state);
+        showScreen("screen-calc");
+        renderAll();
+      }
+    };
+  };
 
-      if (modeReplace){
-        state.shops = incoming;
-        state.selectedShopId = incoming[0]?.id ?? null;
+  const presetLabel = (p) => {
+    if (p === "sum_then_tax") return "税抜合計→税計算";
+    if (p === "already_inclusive") return "入力は税込";
+    return "商品ごと税→合計";
+  };
+
+  const computeTotals = (st, shop) => {
+    const s = shop || getCurrentShop(st);
+    const preset = s.preset || "item_tax_each";
+
+    let baseTotal = 0;
+    let taxTotal = 0;
+    let inclTotal = 0;
+
+    const items = st.cart || [];
+
+    // helper to apply line discount
+    const applyLineDiscount = (amount, disc) => {
+      if (!disc || disc.type === "none") return amount;
+      const v = Number(disc.value) || 0;
+      if (disc.type === "percent") return Math.max(0, amount - (amount * v / 100));
+      if (disc.type === "yen") return Math.max(0, amount - v);
+      return amount;
+    };
+
+    if (preset === "already_inclusive") {
+      // input treated as inclusive (tax included), per item taxRate still used for breakdown
+      for (const it of items) {
+        const taxRate = clampTax(it.taxRate);
+        const incl = applyLineDiscount(Number(it.priceStr) || 0, it.lineDiscount);
+        // derive base & tax using incl->base rounding
+        const base = baseFromInclusive(incl, taxRate, s.inclToBaseRounding, s.roundTo);
+        const tax = incl - base;
+        baseTotal += base;
+        taxTotal += tax;
+        inclTotal += incl;
+      }
+      // final rounding on totals (shop rounding)
+      baseTotal = applyRounding(baseTotal, s.rounding, s.roundTo);
+      taxTotal = applyRounding(taxTotal, s.rounding, s.roundTo);
+      inclTotal = applyRounding(inclTotal, s.rounding, s.roundTo);
+    } else if (preset === "sum_then_tax") {
+      // sum base then tax
+      let sumBaseRaw = 0;
+      for (const it of items) {
+        const taxRate = clampTax(it.taxRate);
+        const p = Number(it.priceStr) || 0;
+        let base = p;
+
+        if (st.mode === "advanced" && it.priceMode === "incl") {
+          base = baseFromInclusive(p, taxRate, s.inclToBaseRounding, s.roundTo);
+        }
+        base = applyLineDiscount(base, it.lineDiscount);
+
+        sumBaseRaw += base;
+      }
+      const baseRounded = applyRounding(sumBaseRaw, s.rounding, s.roundTo);
+      const tax = calcTaxFromBase(baseRounded, st.mode === "advanced" ? 10 : st.simpleTaxRate, s.taxRounding, s.roundTo); // fallback: use selected in simple, else 10
+      baseTotal = baseRounded;
+      taxTotal = tax;
+      inclTotal = baseTotal + taxTotal;
+      inclTotal = applyRounding(inclTotal, s.rounding, s.roundTo);
+    } else {
+      // item_tax_each
+      for (const it of items) {
+        const taxRate = clampTax(it.taxRate);
+        const p = Number(it.priceStr) || 0;
+
+        let base = p;
+        if (st.mode === "advanced" && it.priceMode === "incl") {
+          base = baseFromInclusive(p, taxRate, s.inclToBaseRounding, s.roundTo);
+        }
+
+        base = applyLineDiscount(base, it.lineDiscount);
+        base = applyRounding(base, s.rounding, s.roundTo);
+
+        const tax = calcTaxFromBase(base, taxRate, s.taxRounding, s.roundTo);
+        const incl = base + tax;
+
+        baseTotal += base;
+        taxTotal += tax;
+        inclTotal += incl;
+      }
+      baseTotal = applyRounding(baseTotal, s.rounding, s.roundTo);
+      taxTotal = applyRounding(taxTotal, s.rounding, s.roundTo);
+      inclTotal = applyRounding(inclTotal, s.rounding, s.roundTo);
+    }
+
+    // apply total discount (advanced)
+    if (st.mode === "advanced" && st.totalDiscount && st.totalDiscount.enabled) {
+      const d = st.totalDiscount;
+      const val = Number(d.value) || 0;
+
+      const applyDisc = (amount) => {
+        if (d.type === "percent") return Math.max(0, amount - (amount * val / 100));
+        if (d.type === "yen") return Math.max(0, amount - val);
+        return amount;
+      };
+
+      if (d.target === "base") {
+        baseTotal = applyDisc(baseTotal);
+        baseTotal = applyRounding(baseTotal, s.rounding, s.roundTo);
+        taxTotal = calcTaxFromBase(baseTotal, 10, s.taxRounding, s.roundTo); // approximate: using 10 here because mixed is complex; practical
+        inclTotal = applyRounding(baseTotal + taxTotal, s.rounding, s.roundTo);
       } else {
-        state.shops.push(...incoming);
-        if (!state.selectedShopId) state.selectedShopId = state.shops[0]?.id ?? null;
+        inclTotal = applyDisc(inclTotal);
+        inclTotal = applyRounding(inclTotal, s.rounding, s.roundTo);
+        // breakdown
+        baseTotal = applyRounding(baseTotal, s.rounding, s.roundTo);
+        taxTotal = applyRounding(inclTotal - baseTotal, s.rounding, s.roundTo);
       }
-
-      saveState();
-      renderShopSelect();
-      renderShopList();
-      renderTotals();
-      alert("インポートしました。");
-    }catch{
-      alert("インポートできませんでした。ファイル内容を確認してください。");
     }
-  };
-  reader.readAsText(file);
-}
-function normalizeImportedShop(s){
-  const policy = {
-    aggregation: s.policy?.aggregation === "RATE_GROUP_ROUND" ? "RATE_GROUP_ROUND" : "ITEM_ROUND",
-    roundingMethod: ["ROUND","FLOOR","CEIL"].includes(s.policy?.roundingMethod) ? s.policy.roundingMethod : "ROUND",
-    roundingUnit: [1,10,100].includes(Number(s.policy?.roundingUnit)) ? Number(s.policy.roundingUnit) : 1,
-    inclToBaseRounding: ["NONE","ROUND","FLOOR","CEIL"].includes(s.policy?.inclToBaseRounding) ? s.policy.inclToBaseRounding : "NONE",
+
+    return {
+      base: Math.round(baseTotal),
+      tax: Math.round(taxTotal),
+      incl: Math.round(inclTotal),
+    };
   };
 
-  const ratesEnabled = [];
-  if (Array.isArray(s.ratesEnabled)){
-    if (s.ratesEnabled.includes(0.08)) ratesEnabled.push(0.08);
-    if (s.ratesEnabled.includes(0.10)) ratesEnabled.push(0.10);
-  }
-  if (ratesEnabled.length === 0) ratesEnabled.push(0.10);
-
-  return {
-    id: uuid(),
-    name: String(s.name || "（店名なし）"),
-    memo: String(s.memo || ""),
-    preset: s.preset || "CUSTOM",
-    policy,
-    ratesEnabled,
-    createdAt: nowISO(),
-    updatedAt: nowISO(),
-  };
-}
-
-/* ------------------------------
-   HTMLエスケープ
--------------------------------- */
-function escapeHtml(s){
-  // replaceAll 非対応ブラウザでも動くように、正規表現でエスケープします
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-function escapeAttr(s){
-  return escapeHtml(s).replace(/\n/g, " ");
-}
-
-/* ------------------------------
-   イベント
--------------------------------- */
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => {
-    sfxClick();
-    setScreen(btn.dataset.screen);
-  });
-});
-
-$("goShops").addEventListener("click", () => { sfxClick(); setScreen("shops"); });
-
-$("shopSelect").addEventListener("change", (e) => {
-  sfxClick();
-  state.selectedShopId = e.target.value;
-  saveState();
-  renderShopSelect();
-  renderCart();
-  renderTotals();
-});
-
-$("addItem").addEventListener("click", () => {
-  sfxClick();
-  const shop = getSelectedShop();
-  const enabled = shop?.ratesEnabled ?? [0.10];
-
-  // 追加時の税率（簡単モードなら defaultRate を優先）
-  let rate = enabled[0] ?? 0.10;
-  if (isSimpleMode()){
-    const want = state.ui.simple.defaultRate ?? 0.10;
-    rate = enabled.includes(want) ? want : (enabled[0] ?? 0.10);
-  }
-
-  const it = defaultItem(rate);
-
-  // 簡単モードなら税込/税抜を一括適用
-  if (isSimpleMode()){
-    it.priceMode = state.ui.simple.priceMode;
-    it.discountType = "NONE";
-    it.discountValue = 0;
-  }
-
-  state.cart.push(it);
-  saveState();
-  renderCart();
-  renderTotals();
-});
-
-$("clearCart").addEventListener("click", () => {
-  sfxClick();
-  if (!confirm("入力中の商品をすべて消去しますか？")) return;
-  state.cart = [];
-  saveState();
-  renderCart();
-  renderTotals();
-});
-
-$("totalDiscountType").addEventListener("change", () => renderTotals());
-$("totalDiscountValue").addEventListener("input", () => renderTotals());
-$("totalDiscountTarget").addEventListener("change", () => renderTotals());
-
-$("saveHistory").addEventListener("click", () => {
-  sfxClick();
-  const shop = getSelectedShop();
-  const res = computeTransaction(shop, state.cart, state.cartSettings);
-
-  if (!shop || state.cart.length === 0){
-    alert("店と商品を入力してから保存してください。");
-    return;
-  }
-
-  const entry = {
-    id: uuid(),
-    at: Date.now(),
-    shopSnapshot: JSON.parse(JSON.stringify(shop)),
-    itemsSnapshot: JSON.parse(JSON.stringify(state.cart)),
-    cartSettingsSnapshot: JSON.parse(JSON.stringify(state.cartSettings)),
-    result: {
-      subtotal: res.subtotal,
-      tax: res.tax,
-      totalBeforeDiscount: res.totalBeforeDiscount,
-      discountAmount: res.discountAmount,
-      payTotal: res.payTotal,
-    }
+  const recalcTotals = () => {
+    const shop = getCurrentShop(state);
+    const totals = computeTotals(state, shop);
+    sumBase.textContent = yen(totals.base);
+    sumTax.textContent = yen(totals.tax);
+    sumIncl.textContent = yen(totals.incl);
+    sumIncl.dataset.raw = String(totals.incl);
   };
 
-  state.history.push(entry);
-  saveState();
-  renderHistory();
-  alert("履歴に保存しました。");
-});
+  const renderAll = () => {
+    renderShopSelects();
+    loadShopForm(state.currentShopId);
+    modePill.textContent = `モード：${state.mode === "advanced" ? "詳細" : "簡単"}`;
+    // set simple bar segs
+    $$("#simpleBar .seg").forEach(b => {
+      b.classList.toggle("is-on", Number(b.dataset.simpleTax) === state.simpleTaxRate);
+    });
 
-/* 店フォーム */
-$("preset").addEventListener("change", () => {
-  sfxClick();
-  const preset = $("preset").value;
-  if (preset !== "CUSTOM"){
-    applyPresetToForm(preset);
-  }
-});
-
-$("saveShop").addEventListener("click", () => {
-  sfxClick();
-  const form = readShopForm();
-  if (!form.name){
-    alert("店名を入力してください。");
-    return;
-  }
-
-  const editingId = state.ui.shopEditingId;
-  const ts = nowISO();
-
-  if (editingId){
-    const idx = state.shops.findIndex(s => s.id === editingId);
-    if (idx >= 0){
-      state.shops[idx] = { ...state.shops[idx], name: form.name, memo: form.memo, preset: form.preset, policy: form.policy, ratesEnabled: form.ratesEnabled, updatedAt: ts };
-    }
-    state.ui.shopEditingId = null;
-    $("cancelEdit").classList.add("is-hidden");
-    $("saveShop").textContent = "登録";
-    alert("更新しました。");
-  } else {
-    const shop = { id: uuid(), name: form.name, memo: form.memo, preset: form.preset, policy: form.policy, ratesEnabled: form.ratesEnabled, createdAt: ts, updatedAt: ts };
-    state.shops.push(shop);
-    if (!state.selectedShopId) state.selectedShopId = shop.id;
-    alert("登録しました。");
-  }
-
-  saveState();
-  renderShopSelect();
-  renderShopList();
-  renderTotals();
-  resetShopForm();
-});
-
-$("resetShop").addEventListener("click", () => { sfxClick(); resetShopForm(); });
-
-$("cancelEdit").addEventListener("click", () => {
-  sfxClick();
-  resetShopForm();
-  alert("編集をキャンセルしました。");
-});
-
-$("seedDemo").addEventListener("click", () => {
-  sfxClick();
-  const ts = nowISO();
-
-  const demo1 = {
-    id: uuid(),
-    name: "例：商品ごと端数処理の店",
-    memo: "商品ごとに税計算し、切り捨てします。",
-    preset: "PRESET_ITEM_ROUND",
-    policy: defaultShopPolicy("PRESET_ITEM_ROUND"),
-    ratesEnabled: [0.08, 0.10],
-    createdAt: ts,
-    updatedAt: ts,
-  };
-
-  const demo2 = {
-    id: uuid(),
-    name: "例：税率ごと合計の店",
-    memo: "税率ごとに合計してから、四捨五入します。",
-    preset: "PRESET_RATE_GROUP",
-    policy: defaultShopPolicy("PRESET_RATE_GROUP"),
-    ratesEnabled: [0.08, 0.10],
-    createdAt: ts,
-    updatedAt: ts,
-  };
-
-  state.shops.push(demo1, demo2);
-  if (!state.selectedShopId) state.selectedShopId = demo1.id;
-
-  saveState();
-  renderShopSelect();
-  renderShopList();
-  renderTotals();
-  alert("例の店を追加しました。");
-});
-
-$("deleteAllShops").addEventListener("click", () => {
-  sfxClick();
-  if (!confirm("店プロフィールを全削除しますか？")) return;
-  state.shops = [];
-  state.selectedShopId = null;
-  saveState();
-  renderShopSelect();
-  renderShopList();
-  renderTotals();
-});
-
-$("exportAll").addEventListener("click", () => {
-  sfxClick();
-  exportJson("MITTI_ShopHelper_Shops.json", {
-    kind: "MITTI_SHOPHELPER_EXPORT",
-    version: 2,
-    exportedAt: nowISO(),
-    shops: state.shops,
-  });
-});
-
-$("importFile").addEventListener("change", (e) => {
-  sfxClick();
-  const file = e.target.files?.[0];
-  if (!file) return;
-  handleImportFile(file);
-  e.target.value = "";
-});
-
-/* 履歴 */
-$("deleteAllHistory").addEventListener("click", () => {
-  sfxClick();
-  if (!confirm("履歴を全削除しますか？")) return;
-  state.history = [];
-  saveState();
-  renderHistory();
-});
-
-/* 検証 */
-$("runVerify").addEventListener("click", () => {
-  sfxClick();
-  const shop = getSelectedShop();
-  if (!shop){ alert("店を登録してから検証してください。"); return; }
-  if (state.cart.length === 0){ alert("商品を入力してから検証してください。"); return; }
-
-  const receipt = safeInt($("receiptTotal").value, -1);
-  if (receipt < 0){ alert("レシート合計を入力してください。"); return; }
-
-  const current = computeTransaction(shop, state.cart, state.cartSettings);
-  const diff = current.payTotal - receipt;
-
-  const { matches, closest } = suggestPoliciesForReceipt(shop, state.cart, state.cartSettings, receipt);
-
-  const box = $("verifyResult");
-  box.innerHTML = "";
-
-  const summary = document.createElement("div");
-  summary.className = "list-item";
-  summary.innerHTML = `
-    <div class="list-top">
-      <div>
-        <strong>現在の計算結果</strong>
-        <div class="list-meta">${escapeHtml(policyShort(shop.policy))}</div>
-      </div>
-      <div style="text-align:right;">
-        <div><strong>${yen(current.payTotal)}</strong></div>
-        <div class="list-meta">レシート：${yen(receipt)} / 差分：${yen(Math.abs(diff))}（${diff === 0 ? "一致" : (diff > 0 ? "多い" : "少ない")}）</div>
-      </div>
-    </div>
-  `;
-  box.appendChild(summary);
-
-  const makeCandidateList = (title, arr, isMatch) => {
-    const div = document.createElement("div");
-    div.className = "list-item";
-    const lines = arr.map((c, i) => {
-      const badge = isMatch ? "一致" : `差分：${yen(c.diff)}`;
-      return `(${i+1}) ${policyShort(c.policy)} / 計算：${yen(c.payTotal)} / ${badge}`;
-    }).join("\n");
-    div.innerHTML = `<strong>${escapeHtml(title)}</strong><div class="list-meta">${escapeHtml(lines || "候補がありません。")}</div>`;
-    box.appendChild(div);
-  };
-
-  if (matches.length > 0){
-    makeCandidateList("一致する候補（上位）", matches, true);
-    state.ui.lastVerifySuggestion = matches[0].policy;
-    $("applySuggested").disabled = false;
-  } else {
-    makeCandidateList("近い候補（上位）", closest, false);
-    state.ui.lastVerifySuggestion = closest[0]?.policy ?? null;
-    $("applySuggested").disabled = !state.ui.lastVerifySuggestion;
-  }
-  saveState();
-});
-
-$("applySuggested").addEventListener("click", () => {
-  sfxClick();
-  const shop = getSelectedShop();
-  const p = state.ui.lastVerifySuggestion;
-  if (!shop || !p){ alert("適用できる候補がありません。"); return; }
-  if (!confirm("候補の設定を、現在の店プロフィールに適用しますか？")) return;
-
-  shop.policy = { ...shop.policy, ...p };
-  shop.preset = "CUSTOM";
-  shop.updatedAt = nowISO();
-
-  saveState();
-  renderShopSelect();
-  renderShopList();
-  renderTotals();
-  alert("適用しました。");
-});
-
-/* ------------------------------
-   サウンドUI
--------------------------------- */
-function syncSoundUI(){
-  $("bgmToggle").textContent = `BGM：${soundPrefs.bgm ? "ON" : "OFF"}`;
-  $("sfxToggle").textContent = `効果音：${soundPrefs.sfx ? "ON" : "OFF"}`;
-  $("bgmVolume").value = String(Math.round(soundPrefs.volume * 100));
-}
-$("bgmToggle").addEventListener("click", () => {
-  sfxClick();
-  soundPrefs.bgm = !soundPrefs.bgm;
-  saveSoundPrefs();
-  syncSoundUI();
-
-  if (soundPrefs.bgm) startBgm();
-  else stopBgm();
-});
-$("sfxToggle").addEventListener("click", () => {
-  soundPrefs.sfx = !soundPrefs.sfx;
-  saveSoundPrefs();
-  syncSoundUI();
-  sfxClick();
-});
-$("bgmVolume").addEventListener("input", (e) => {
-  const v = clamp(Number(e.target.value) / 100, 0, 1);
-  setMasterVolume(v);
-});
-
-/* ------------------------------
-   初期化
--------------------------------- */
-(function init(){
-  requestAnimationFrame(() => {
-    const tab = document.querySelector(".tab.is-active");
-    moveUnderline(tab);
-  });
-
-  syncSoundUI();
-  setMasterVolume(soundPrefs.volume);
-
-  if (state.shops.length === 0){
-    resetShopForm();
-    setScreen("help");
-  }
-
-  syncDiscountUIFromState();
-
-  renderShopSelect();
-  renderShopList();
-  renderCart();
-  renderTotals();
-  renderHistory();
-  applySimpleBarUI();
-
-  if (state.shops.length > 0 && state.cart.length === 0){
-    const shop = getSelectedShop();
-    const rate = shop?.ratesEnabled?.[0] ?? 0.10;
-    state.cart.push(defaultItem(rate));
-    saveStateNow();
     renderCart();
-    renderTotals();
-  }
+    renderDiscountPanel();
+    renderVerifyPanel();
+    recalcTotals();
+    renderHistory();
+  };
 
-  if (soundPrefs.bgm){
-    soundPrefs.bgm = false;
-    saveSoundPrefs();
-    syncSoundUI();
-  }
+  // ========= Init =========
+  ensureCartAtLeastOne();
+  renderAll();
+  // underline initial
+  setTimeout(() => {
+    const active = tabButtons.find(t => t.classList.contains("is-active"));
+    if (active) moveUnderline(active);
+  }, 20);
+
 })();

@@ -1,47 +1,36 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MITTI ShopHelper</title>
-
-  <link rel="manifest" href="manifest.json">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b1020">
-  <link rel="stylesheet" href="style.css" />
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <title>MITTI ShopHelper</title>
+  <link rel="stylesheet" href="./style.css">
 </head>
 
-<body data-mode="SIMPLE">
-  <div class="bg">
-    <div class="bg-aurora"></div>
-    <div class="bg-grid"></div>
-    <div class="bg-stars"></div>
-  </div>
-
+<body>
   <header class="app-header">
     <div class="brand">
-      <div class="brand-title">
-        MITTI ShopHelper <span class="brand-badge">NEON</span>
+      <div class="logo">M</div>
+      <div class="brand-text">
+        <div class="brand-title">MITTI ShopHelper</div>
+        <div class="brand-sub">みっちのための買い物計算アプリ</div>
       </div>
-      <div class="brand-sub">みっちのための買い物計算アプリ</div>
     </div>
 
-    <div class="hud" aria-label="設定">
-      <button id="modeToggle" class="btn ghost small" type="button">モード：詳細</button>
-
-      <button id="bgmToggle" class="btn ghost small" type="button">BGM：OFF</button>
-      <button id="sfxToggle" class="btn ghost small" type="button">効果音：ON</button>
-      <label class="hud-vol">
-        <span>音量</span>
-        <input id="bgmVolume" type="range" min="0" max="100" value="35" />
-      </label>
-    </div>
-
-    <nav class="tabs" aria-label="画面切り替え">
-      <button class="tab is-active" data-screen="calc" type="button">計算</button>
-      <button class="tab" data-screen="shops" type="button">店</button>
-      <button class="tab" data-screen="history" type="button">履歴</button>
-      <button class="tab only-pro" data-screen="verify" type="button">検証</button>
-      <button class="tab" data-screen="help" type="button">使い方</button>
+    <nav class="tabs" aria-label="ナビゲーション">
+      <button class="tab is-active" data-screen="screen-calc" aria-current="page">計算</button>
+      <button class="tab" data-screen="screen-shops">店</button>
+      <button class="tab" data-screen="screen-history">履歴</button>
+      <button class="tab" data-screen="screen-help">使い方</button>
       <div class="tab-underline" aria-hidden="true"></div>
     </nav>
   </header>
@@ -49,349 +38,340 @@
   <div id="updateToast" class="toast is-hidden" role="status" aria-live="polite">
     <div class="toast-text">新しいバージョンがあります。更新すると最新の修正が反映されます。</div>
     <div class="toast-actions">
-      <button id="reloadBtn" class="btn" type="button">更新</button>
-      <button id="dismissUpdate" class="btn ghost" type="button">後で</button>
+      <button id="reloadBtn" class="btn btn-primary">更新</button>
+      <button id="dismissBtn" class="btn btn-ghost">あとで</button>
     </div>
   </div>
 
-  <main class="container">
-    <!-- 計算 -->
-    <section id="screen-calc" class="screen is-active">
-      <div class="card">
-        <div class="row between">
-          <h2>店選択</h2>
-          <button id="goShops" class="btn ghost" type="button">店登録へ</button>
-        </div>
-
-        <div class="row wrap">
-          <label class="field grow">
-            <span>店</span>
-            <select id="shopSelect"></select>
-          </label>
-
-          <div class="pill">
-            <div class="pill-title">計算ルール</div>
-            <div id="policySummary" class="pill-body"></div>
+  <main class="app-main">
+    <!-- CALC -->
+    <section id="screen-calc" class="screen is-active" aria-label="計算画面">
+      <div class="grid">
+        <div class="card">
+          <div class="card-title-row">
+            <h2>店を選択</h2>
+            <div class="row">
+              <span class="pill" id="modePill">モード：簡単</span>
+              <button id="toggleModeBtn" class="btn btn-ghost" type="button">モード切替</button>
+            </div>
           </div>
-        </div>
 
-        <p id="shopMemoView" class="muted"></p>
-      </div>
-
-      <div class="card">
-        <div class="row between">
-          <h2>商品入力</h2>
           <div class="row wrap">
-            <button id="addItem" class="btn" type="button">商品追加</button>
-            <button id="clearCart" class="btn ghost" type="button">入力クリア</button>
+            <select id="shopSelect" class="input" aria-label="店の選択"></select>
+            <button id="openShopBtn" class="btn btn-secondary" type="button">店設定</button>
+          </div>
+
+          <div class="divider"></div>
+
+          <div id="simpleBar" class="simple-bar">
+            <div class="row wrap">
+              <button class="seg is-on" data-simple-tax="10" type="button">10%</button>
+              <button class="seg" data-simple-tax="8" type="button">8%</button>
+              <span class="muted">追加は「商品を追加」→金額入力でOK。</span>
+            </div>
+          </div>
+
+          <div id="cartArea"></div>
+
+          <div class="row wrap gap">
+            <button id="addItemBtn" class="btn btn-primary" type="button">商品を追加</button>
+            <button id="clearCartBtn" class="btn btn-ghost" type="button">入力をクリア</button>
+            <button id="saveHistoryBtn" class="btn btn-secondary" type="button">履歴に保存</button>
           </div>
         </div>
 
-        <!-- 簡単モード：一括設定バー -->
-         <div class="simplebar only-simple">
-            <button id="simplePriceModeToggle" class="btn ghost" type="button">価格：税抜</button>
-            <div class="simplebar-group">
-                <span class="muted">追加は</span>
-                <button id="simpleDefaultRate8" class="btn ghost small" type="button" aria-pressed="false">8%</button>
-                <button id="simpleDefaultRate10" class="btn ghost small" type="button" aria-pressed="true">10%</button>
-            </div>
-            
-            <div class="muted">※商品名・割引は非表示</div>
-        </div>
-
-
-        <div id="itemList" class="items"></div>
-      </div>
-
-      <!-- 詳細モードのみ表示 -->
-      <div class="card only-pro">
-        <div class="row between">
-          <h2>割引・クーポン</h2>
-          <div class="muted">行割引は商品カード内で設定できます。</div>
-        </div>
-
-        <div class="grid2">
-          <label class="field">
-            <span>合計割引の種類</span>
-            <select id="totalDiscountType">
-              <option value="NONE">なし</option>
-              <option value="PERCENT">％引き</option>
-              <option value="YEN">円引き</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>合計割引の値</span>
-            <input id="totalDiscountValue" inputmode="numeric" placeholder="例：5（％） または 100（円）" />
-          </label>
-
-          <label class="field">
-            <span>合計割引の適用対象</span>
-            <select id="totalDiscountTarget">
-              <option value="BASE">税抜合計に適用</option>
-              <option value="TOTAL">税込合計に適用</option>
-            </select>
-          </label>
-
-          <div class="note">
-            <div class="note-title">補足</div>
-            <div class="note-body">
-              複数税率の場合、税抜合計への円引きは、税抜金額の比率で自動配分します。
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card glow">
-        <div class="row between">
+        <div class="card totals">
           <h2>合計</h2>
-          <button id="saveHistory" class="btn ghost" type="button">履歴保存</button>
-        </div>
-
-        <div class="result">
-          <div class="result-line"><span>小計（税抜）</span><strong id="subtotal">0円</strong></div>
-          <div class="result-line"><span>税額</span><strong id="tax">0円</strong></div>
-          <div class="result-line"><span>税込合計（割引前）</span><strong id="totalBefore">0円</strong></div>
-          <div class="result-line only-pro"><span>割引</span><strong id="discount">0円</strong></div>
-          <div class="result-line total"><span>支払合計</span><strong id="payTotal">0円</strong></div>
-        </div>
-
-        <p id="calcNote" class="muted"></p>
-        <p class="muted only-simple" style="margin-top:8px;">
-          簡単モードでは、割引・検証・高度な丸め設定を非表示にしています。必要な場合は「モード：詳細」に切り替えてください。
-        </p>
-      </div>
-    </section>
-
-    <!-- 店 -->
-    <section id="screen-shops" class="screen">
-      <div class="card">
-        <div class="row between">
-          <h2>店登録</h2>
-          <div class="row wrap only-pro">
-            <button id="exportAll" class="btn ghost" type="button">全店エクスポート</button>
-            <label class="filebtn btn ghost">
-              インポート
-              <input id="importFile" type="file" accept="application/json" />
-            </label>
-          </div>
-        </div>
-
-        <div class="grid2">
-          <label class="field">
-            <span>店名</span>
-            <input id="shopName" placeholder="例：〇〇スーパー" />
-          </label>
-
-          <label class="field">
-            <span>税率（固定）</span>
-            <div class="chips">
-              <label class="chip"><input id="rate8" type="checkbox" checked>8%</label>
-              <label class="chip"><input id="rate10" type="checkbox" checked>10%</label>
+          <div class="totals-grid">
+            <div class="totals-row">
+              <div class="label">税抜合計</div>
+              <div class="value" id="sumBase">0</div>
             </div>
-          </label>
-
-          <label class="field">
-            <span>プリセット</span>
-            <select id="preset">
-              <option value="PRESET_ITEM_ROUND">商品ごとに税計算（レジ方式）</option>
-              <option value="PRESET_RATE_GROUP">税率ごとに合計して税計算（まとめ方式）</option>
-              <option value="CUSTOM">カスタム</option>
-            </select>
-          </label>
-
-          <!-- 詳細設定は詳細モードだけ -->
-          <div class="only-pro">
-            <label class="field">
-              <span>計算方式（aggregation）</span>
-              <select id="aggregation">
-                <option value="ITEM_ROUND">商品ごとに丸め</option>
-                <option value="RATE_GROUP_ROUND">税率ごとにまとめて丸め</option>
-              </select>
-            </label>
+            <div class="totals-row">
+              <div class="label">消費税</div>
+              <div class="value" id="sumTax">0</div>
+            </div>
+            <div class="totals-row big">
+              <div class="label">支払合計（税込）</div>
+              <div class="value" id="sumIncl">0</div>
+            </div>
           </div>
 
-          <div class="only-pro">
-            <label class="field">
-              <span>端数処理（丸め方法）</span>
-              <select id="roundingMethod">
-                <option value="ROUND">四捨五入</option>
-                <option value="FLOOR">切り捨て</option>
-                <option value="CEIL">切り上げ</option>
-              </select>
-            </label>
-          </div>
+          <div id="discountPanel" class="discount-panel"></div>
 
-          <div class="only-pro">
-            <label class="field">
-              <span>丸め単位</span>
-              <select id="roundingUnit">
-                <option value="1">1円</option>
-                <option value="10">10円</option>
-                <option value="100">100円</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="only-pro">
-            <label class="field">
-              <span>税込→税抜の丸め（入力が税込のとき）</span>
-              <select id="inclToBaseRounding">
-                <option value="NONE">なし</option>
-                <option value="ROUND">四捨五入</option>
-                <option value="FLOOR">切り捨て</option>
-                <option value="CEIL">切り上げ</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="field">
-            <span>メモ</span>
-            <input id="shopMemo" placeholder="例：この店は商品ごとに端数処理があります。" />
-          </label>
-        </div>
-
-        <div class="row wrap">
-          <button id="saveShop" class="btn" type="button">登録</button>
-          <button id="resetShop" class="btn ghost" type="button">リセット</button>
-          <button id="cancelEdit" class="btn ghost is-hidden" type="button">編集キャンセル</button>
-        </div>
-
-        <p class="muted only-pro">
-          店の計算ルールは、履歴に保存するときに一緒に記録します。後から店設定を変更しても、履歴の合計は崩れません。
-        </p>
-        <p class="muted only-simple">
-          簡単モードでは、店設定は「プリセット」を中心に使います。細かい丸めを調整したい場合は、詳細モードに切り替えてください。
-        </p>
-      </div>
-
-      <div class="card">
-        <div class="row between">
-          <h2>登録済みの店</h2>
-          <button id="seedDemo" class="btn ghost" type="button">例の店を追加</button>
-        </div>
-        <div id="shopList" class="list"></div>
-        <div class="row">
-          <button id="deleteAllShops" class="btn danger" type="button">店を全削除</button>
+          <div id="verifyPanel" class="verify-panel"></div>
         </div>
       </div>
     </section>
 
-    <!-- 履歴 -->
-    <section id="screen-history" class="screen">
+    <!-- SHOPS -->
+    <section id="screen-shops" class="screen" aria-label="店画面">
+      <div class="grid">
+        <div class="card">
+          <div class="card-title-row">
+            <h2>店プロフィール</h2>
+            <div class="row">
+              <button id="newShopBtn" class="btn btn-primary" type="button">新規</button>
+              <button id="exportShopsBtn" class="btn btn-ghost" type="button">エクスポート</button>
+              <label class="btn btn-ghost file-btn">
+                インポート
+                <input id="importShopsInput" type="file" accept="application/json" hidden>
+              </label>
+            </div>
+          </div>
+
+          <div class="row wrap">
+            <select id="shopsList" class="input" aria-label="店一覧"></select>
+            <button id="deleteShopBtn" class="btn btn-danger" type="button">削除</button>
+          </div>
+
+          <div class="divider"></div>
+
+          <form id="shopForm" class="form">
+            <label class="field">
+              <span>店名</span>
+              <input id="shopName" class="input" type="text" placeholder="例：スーパーA">
+            </label>
+
+            <label class="field">
+              <span>プリセット（計算ルール）</span>
+              <select id="shopPreset" class="input">
+                <option value="item_tax_each">商品ごとに税計算→合計（一般的）</option>
+                <option value="sum_then_tax">税抜合計→税計算（まとめて課税）</option>
+                <option value="already_inclusive">入力は税込価格（内税）</option>
+              </select>
+            </label>
+
+            <div class="note">
+              <div class="note-title">詳細設定（詳細モード向け）</div>
+              <div class="note-body">
+                丸めや税抜⇄税込のルールは、お店によって違うことがあります。困ったときは「検証」タブでレシート合計と照合して調整できます。
+              </div>
+            </div>
+
+            <div class="two-col">
+              <label class="field">
+                <span>丸め方法</span>
+                <select id="shopRounding" class="input">
+                  <option value="round">四捨五入</option>
+                  <option value="floor">切り捨て</option>
+                  <option value="ceil">切り上げ</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>丸め単位（roundTo）</span>
+                <select id="shopRoundTo" class="input">
+                  <option value="1">1円</option>
+                  <option value="10">10円</option>
+                  <option value="100">100円</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="two-col">
+              <label class="field">
+                <span>税の丸め（税額）</span>
+                <select id="shopTaxRounding" class="input">
+                  <option value="round">四捨五入</option>
+                  <option value="floor">切り捨て</option>
+                  <option value="ceil">切り上げ</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>税込→税抜の丸め（inclToBaseRounding）</span>
+                <select id="shopInclToBase" class="input">
+                  <option value="round">四捨五入</option>
+                  <option value="floor">切り捨て</option>
+                  <option value="ceil">切り上げ</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="row wrap gap">
+              <button id="saveShopBtn" class="btn btn-secondary" type="button">保存</button>
+              <button id="setAsCurrentBtn" class="btn btn-ghost" type="button">この店を計算に適用</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>メモ</h2>
+          <ul class="bullets">
+            <li>履歴には「その時点の店ルール」も一緒に保存されます。</li>
+            <li>後から店設定を変えても、過去の履歴が崩れにくい構造です。</li>
+            <li>端末移行は「エクスポート/インポート」が便利です。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="screen-history" class="screen" aria-label="履歴画面">
       <div class="card">
-        <div class="row between">
+        <div class="card-title-row">
           <h2>履歴</h2>
-          <button id="deleteAllHistory" class="btn danger" type="button">履歴を全削除</button>
-        </div>
-        <div id="historyList" class="list"></div>
-      </div>
-    </section>
-
-    <!-- 検証（詳細モードのみ） -->
-    <section id="screen-verify" class="screen only-pro">
-      <div class="card">
-        <h2>レシート検証</h2>
-        <p class="muted">
-          現在の入力内容から合計を計算し、レシート合計と一致するか確認します。差分がある場合は、合いそうな丸め設定候補を提示します。
-        </p>
-
-        <div class="grid2">
-          <label class="field">
-            <span>レシートの支払合計（円）</span>
-            <input id="receiptTotal" inputmode="numeric" placeholder="例：1234" />
-          </label>
-
-          <div class="note">
-            <div class="note-title">確認事項</div>
-            <div class="note-body">
-              行割引・合計割引も含めて、今の入力どおりに検証します。レシートの割引条件が異なる場合は、入力内容を合わせてください。
-            </div>
+          <div class="row">
+            <button id="clearHistoryBtn" class="btn btn-danger" type="button">履歴を全削除</button>
           </div>
         </div>
 
-        <div class="row wrap">
-          <button id="runVerify" class="btn" type="button">検証開始</button>
-          <button id="applySuggested" class="btn ghost" type="button" disabled>候補を店に適用</button>
-        </div>
-
-        <div id="verifyResult" class="verify"></div>
+        <div id="historyList" class="history-list"></div>
       </div>
     </section>
 
-    <!-- 使い方 -->
+    <!-- HELP -->
     <section id="screen-help" class="screen">
-      <div class="card">
+      <div class="card help">
         <h2>使い方</h2>
+
         <p class="muted">
-          このアプリは、店によって違う「税の計算のしかた」や「端数処理」を再現して、支払合計を出すためのツールです。
-          上の「モード」ボタンで、簡単／詳細を切り替えられます。
+          MITTI ShopHelper は、店によって違う「税の計算のしかた」や「端数処理」を再現して、支払合計を出すためのツールです。
+          データは端末内に保存されます（サーバーに送信しません）。
         </p>
 
         <div class="note" style="margin-top:12px;">
-          <div class="note-title">最短手順</div>
+          <div class="note-title">最短手順（まずはここだけ）</div>
           <div class="note-body">
-            1. 「店」タブで店プロフィールを登録します。<br>
-            2. 「計算」タブで店を選び、商品を入力します。<br>
-            3. 支払合計を確認し、必要なら「履歴保存」を押します。<br>
-            4. 割引や検証が必要な場合は「モード：詳細」に切り替えてください。
+            1. 「店」タブで、よく行くお店を登録します。<br>
+            2. 「計算」タブで店を選び、商品を追加して金額を入力します。<br>
+            3. 合計を見て、必要なら「履歴に保存」を押します。<br>
+            4. 割引やレシート検証を使うときは「モード：詳細」に切り替えます。
+          </div>
+        </div>
+
+        <div class="help-grid">
+          <div class="help-block">
+            <h3>画面（タブ）の説明</h3>
+            <ul>
+              <li><b>計算</b>：商品を入力して合計を出します。</li>
+              <li><b>店</b>：店プロフィール（計算ルール）を登録・編集します。</li>
+              <li><b>履歴</b>：保存した計算結果を見返したり削除したりできます。</li>
+              <li><b>検証</b>（詳細モードのみ）：レシート合計と一致するか確認し、丸め設定の候補を出します。</li>
+            </ul>
+          </div>
+
+          <div class="help-block">
+            <h3>モードの違い</h3>
+            <ul>
+              <li><b>簡単</b>：最小限の入力（とにかく早く合計）。</li>
+              <li><b>詳細</b>：端数処理／税込→税抜丸め／割引／検証などを使えます。</li>
+            </ul>
+            <p class="muted">迷ったら「簡単」でOK。合わないときだけ「詳細」に切り替えるのがおすすめです。</p>
+          </div>
+
+          <div class="help-block">
+            <h3>店プロフィール（店タブ）</h3>
+            <ul>
+              <li><b>店名</b>：表示用の名前です。</li>
+              <li><b>プリセット</b>：よくある計算ルールを一発で設定します。</li>
+              <li><b>詳細設定</b>（詳細モード）：丸め方法・丸め単位・税込→税抜の丸めなどを細かく調整できます。</li>
+              <li><b>全店エクスポート/インポート</b>：端末移行やバックアップに使えます（.json）。</li>
+            </ul>
+            <p class="muted">※履歴には「その時点の店ルール」も一緒に保存されるため、後から店設定を変えても履歴は崩れません。</p>
+          </div>
+
+          <div class="help-block">
+            <h3>商品入力（計算タブ）</h3>
+            <ul>
+              <li><b>簡単モード</b>：金額だけをテンポよく入力します。税率は上のボタンで切り替えられます。</li>
+              <li><b>詳細モード</b>：商品ごとに税率・税込/税抜、行割引などを設定できます。</li>
+            </ul>
+            <div class="note" style="margin-top:10px;">
+              <div class="note-title">よくあるつまずき</div>
+              <div class="note-body">
+                価格が「1文字ずつ」しか入らないときは、古い版が残っている可能性があります。<br>
+                いったんページを閉じて開き直すか、画面下の「更新」通知が出ていたら押してください。
+              </div>
+            </div>
+          </div>
+
+          <div class="help-block">
+            <h3>割引（詳細モード）</h3>
+            <ul>
+              <li><b>行割引</b>：商品カード内で設定します（％引き／円引き）。</li>
+              <li><b>合計割引</b>：画面の「割引・クーポン」カードで設定します（税抜合計/税込合計のどちらに適用するかも選べます）。</li>
+            </ul>
+          </div>
+
+          <div class="help-block">
+            <h3>レシート検証（詳細モード）</h3>
+            <ol>
+              <li>レシートの「支払合計」を入力します。</li>
+              <li>「検証開始」を押します。</li>
+              <li>差分が出たら、候補として提示された丸め設定を確認します。</li>
+              <li>合いそうなら「候補を店に適用」を押して、店プロフィールへ反映できます。</li>
+            </ol>
+          </div>
+
+          <div class="help-block">
+            <h3>アイコンが変わらない／消えたように見えるとき</h3>
+            <ul>
+              <li>ホーム画面に追加済みの場合：一度削除して、もう一度「ホーム画面に追加」をしてください。</li>
+              <li>それでも変わらない場合：ブラウザの「サイトデータ削除」→再追加が確実です。</li>
+            </ul>
           </div>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="footer">
-    <div class="muted">MITTI ShopHelper / 保存先：端末内（localStorage）</div>
+  <footer class="app-footer">
+    <div class="muted">
+      v1.0.3 / オフライン対応 / 税率 8%・10% / 端数・割引・履歴・店プロフィール対応
+    </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="./app.js"></script>
   <script>
-  // PWA（オフライン対応）
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").then((reg) => {
-      const toast = document.getElementById("updateToast");
-      const reloadBtn = document.getElementById("reloadBtn");
-      const dismissBtn = document.getElementById("dismissUpdate");
+    // Service Worker
+    (async () => {
+      if (!("serviceWorker" in navigator)) return;
+      try {
+        const reg = await navigator.serviceWorker.register("./sw.js");
 
-      const showToast = () => {
-        if (!toast) return;
-        toast.classList.remove("is-hidden");
-      };
+        // 更新が来たらトースト表示
+        function showUpdateToast(worker){
+          const toast = document.getElementById("updateToast");
+          const reloadBtn = document.getElementById("reloadBtn");
+          const dismissBtn = document.getElementById("dismissBtn");
+          toast.classList.remove("is-hidden");
 
-      const hideToast = () => {
-        if (!toast) return;
-        toast.classList.add("is-hidden");
-      };
+          const onReload = () => {
+            if (worker) worker.postMessage("SKIP_WAITING");
+            toast.classList.add("is-hidden");
+          };
+          const onDismiss = () => {
+            toast.classList.add("is-hidden");
+          };
+          reloadBtn.onclick = onReload;
+          dismissBtn.onclick = onDismiss;
+        }
 
-      // すでに待機中のSWがある場合
-      if (reg.waiting && navigator.serviceWorker.controller) {
-        showToast();
-      }
+        if (reg.waiting) showUpdateToast(reg.waiting);
 
-      reg.addEventListener("updatefound", () => {
-        const nw = reg.installing;
-        if (!nw) return;
-        nw.addEventListener("statechange", () => {
-          if (nw.state === "installed" && navigator.serviceWorker.controller) {
-            showToast();
-          }
+        reg.addEventListener("updatefound", () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener("statechange", () => {
+            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+              showUpdateToast(newWorker);
+            }
+          });
         });
-      });
 
-      reloadBtn?.addEventListener("click", () => {
-        // 新しいSWを有効化 → リロード
-        if (reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
-      });
-
-      dismissBtn?.addEventListener("click", hideToast);
-    });
-
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      // 新しいSWに切り替わったら再読み込み
-      location.reload();
-    });
-  }
-</script>
+        // skipWaiting後に自動リロード
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
+      } catch (e) {
+        // SW失敗でもアプリ自体は動く
+      }
+    })();
+  </script>
 </body>
 </html>
