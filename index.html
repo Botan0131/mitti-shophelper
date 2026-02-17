@@ -2,17 +2,23 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#0b1020" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow">
-  <title>MITTI ShopHelper NEON v1.0</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
 
-  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <title>MITTI ShopHelper</title>
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0b1020">
   <link rel="stylesheet" href="style.css" />
 </head>
 
-<body data-mode="SIMPLE">
-  <div class="bg" aria-hidden="true">
+<body data-mode="PRO">
+  <div class="bg">
     <div class="bg-aurora"></div>
     <div class="bg-grid"></div>
     <div class="bg-stars"></div>
@@ -22,17 +28,15 @@
     <div class="brand">
       <div class="brand-title">
         MITTI ShopHelper <span class="brand-badge">NEON</span>
-        <span class="brand-ver">v1.0.0</span>
       </div>
       <div class="brand-sub">みっちのための買い物計算アプリ</div>
     </div>
 
     <div class="hud" aria-label="設定">
-      <button id="modeToggle" class="btn ghost small" type="button">モード：簡単</button>
+      <button id="modeToggle" class="btn ghost small" type="button">モード：詳細</button>
 
       <button id="bgmToggle" class="btn ghost small" type="button">BGM：OFF</button>
       <button id="sfxToggle" class="btn ghost small" type="button">効果音：ON</button>
-
       <label class="hud-vol">
         <span>音量</span>
         <input id="bgmVolume" type="range" min="0" max="100" value="35" />
@@ -66,7 +70,7 @@
 
           <div class="pill">
             <div class="pill-title">計算ルール</div>
-            <div id="policySummary" class="pill-body">—</div>
+            <div id="policySummary" class="pill-body"></div>
           </div>
         </div>
 
@@ -82,23 +86,23 @@
           </div>
         </div>
 
-        <!-- 簡単モード：一括バー -->
-        <div class="simplebar only-simple">
-          <button id="simplePriceModeToggle" class="btn ghost" type="button">価格：税抜</button>
-
-          <div class="simplebar-group">
-            <span class="muted">追加の税率</span>
-            <button id="simpleDefaultRate8" class="btn ghost small" type="button" aria-pressed="false">8%</button>
-            <button id="simpleDefaultRate10" class="btn ghost small" type="button" aria-pressed="true">10%</button>
-          </div>
-
-          <div class="muted">※簡単モードでは商品名・割引を非表示にしています。</div>
+        <!-- 簡単モード：一括設定バー -->
+         <div class="simplebar only-simple">
+            <button id="simplePriceModeToggle" class="btn ghost" type="button">価格：税抜</button>
+            <div class="simplebar-group">
+                <span class="muted">追加する商品の税率：</span>
+                <button id="simpleDefaultRate8" class="btn ghost small" type="button" aria-pressed="false">8%</button>
+                <button id="simpleDefaultRate10" class="btn ghost small" type="button" aria-pressed="true">10%</button>
+            </div>
+            
+            <div class="muted">※商品名・割引は非表示</div>
         </div>
+
 
         <div id="itemList" class="items"></div>
       </div>
 
-      <!-- 詳細モードのみ：割引 -->
+      <!-- 詳細モードのみ表示 -->
       <div class="card only-pro">
         <div class="row between">
           <h2>割引・クーポン</h2>
@@ -152,6 +156,9 @@
         </div>
 
         <p id="calcNote" class="muted"></p>
+        <p class="muted only-simple" style="margin-top:8px;">
+          簡単モードでは、割引・検証・高度な丸め設定を非表示にしています。必要な場合は「モード：詳細」に切り替えてください。
+        </p>
       </div>
     </section>
 
@@ -160,7 +167,6 @@
       <div class="card">
         <div class="row between">
           <h2>店登録</h2>
-
           <div class="row wrap only-pro">
             <button id="exportAll" class="btn ghost" type="button">全店エクスポート</button>
             <label class="filebtn btn ghost">
@@ -177,7 +183,7 @@
           </label>
 
           <label class="field">
-            <span>税率</span>
+            <span>税率（固定）</span>
             <div class="chips">
               <label class="chip"><input id="rate8" type="checkbox" checked>8%</label>
               <label class="chip"><input id="rate10" type="checkbox" checked>10%</label>
@@ -193,7 +199,7 @@
             </select>
           </label>
 
-          <!-- 詳細モード：高度設定 -->
+          <!-- 詳細設定は詳細モードだけ -->
           <div class="only-pro">
             <label class="field">
               <span>計算方式（aggregation）</span>
@@ -228,7 +234,7 @@
 
           <div class="only-pro">
             <label class="field">
-              <span>税込→税抜の丸め</span>
+              <span>税込→税抜の丸め（入力が税込のとき）</span>
               <select id="inclToBaseRounding">
                 <option value="NONE">なし</option>
                 <option value="ROUND">四捨五入</option>
@@ -250,8 +256,11 @@
           <button id="cancelEdit" class="btn ghost is-hidden" type="button">編集キャンセル</button>
         </div>
 
-        <p class="muted">
-          店の計算ルールは、履歴保存時にスナップショットとして一緒に記録されます。後から店設定を変更しても、履歴の合計は崩れません。
+        <p class="muted only-pro">
+          店の計算ルールは、履歴に保存するときに一緒に記録します。後から店設定を変更しても、履歴の合計は崩れません。
+        </p>
+        <p class="muted only-simple">
+          簡単モードでは、店設定は「プリセット」を中心に使います。細かい丸めを調整したい場合は、詳細モードに切り替えてください。
         </p>
       </div>
 
@@ -295,7 +304,7 @@
           <div class="note">
             <div class="note-title">確認事項</div>
             <div class="note-body">
-              レシートの割引条件と、アプリの入力が一致していない場合は、合計が合いません。入力内容をレシートに合わせてください。
+              行割引・合計割引も含めて、今の入力どおりに検証します。レシートの割引条件が異なる場合は、入力内容を合わせてください。
             </div>
           </div>
         </div>
@@ -310,67 +319,160 @@
     </section>
 
     <!-- 使い方 -->
-    <section id="screen-help" class="screen">
-      <div class="card">
-        <h2>使い方</h2>
+<section id="screen-help" class="screen">
+  <div class="card">
+    <h2>使い方</h2>
 
-        <div class="note">
-          <div class="note-title">最短手順</div>
-          <div class="note-body">
-            1. 「店」タブで店プロフィールを登録します。<br>
-            2. 「計算」タブで店を選び、商品を入力します。<br>
-            3. 支払合計を確認し、必要なら「履歴保存」を押します。<br>
-            4. 割引・検証などが必要な場合は、「モード：詳細」に切り替えてください。
-          </div>
-        </div>
-
-        <details class="note" style="margin-top:12px;" open>
-          <summary class="note-title">モードの違い</summary>
-          <div class="note-body">
-            簡単モードは、入力項目を最小にして迷いにくくしています。<br>
-            詳細モードは、割引・検証・高度設定を利用できます。<br>
-            どちらも計算結果は同じ考え方で出しますが、詳細モードの方が再現性を高められます。
-          </div>
-        </details>
-
-        <details class="note" style="margin-top:12px;">
-          <summary class="note-title">「店」のプリセットについて</summary>
-          <div class="note-body">
-            店によって税の計算のしかたが違います。<br><br>
-            ・商品ごとに税計算（レジ方式）：商品ごとに端数処理が入る店に向きます。<br>
-            ・税率ごとに合計して税計算（まとめ方式）：税率別にまとめてから端数処理が入る店に向きます。<br><br>
-            詳細モードでは、切り捨て／四捨五入／切り上げ、丸め単位なども設定できます。
-          </div>
-        </details>
-
-        <details class="note" style="margin-top:12px;">
-          <summary class="note-title">オフライン利用について</summary>
-          <div class="note-body">
-            このアプリは端末内にデータを保存します。基本的に通信は不要です。<br>
-            オフライン機能を有効にするために、最初の1回だけ読み込みが必要です。<br>
-            スマホでは「ホーム画面に追加」すると、アプリのように使えます。
-          </div>
-        </details>
-
-        <details class="note" style="margin-top:12px;">
-          <summary class="note-title">サウンドについて</summary>
-          <div class="note-body">
-            BGMは著作権に配慮し、アプリ内で生成する音（シンセ）を使用しています。<br>
-            音が鳴らない場合は、まず「BGM：ON」を押してください。ブラウザの仕様で、最初は操作が必要です。
-          </div>
-        </details>
+    <div class="note">
+      <div class="note-title">まず最初にすること（1分）</div>
+      <div class="note-body">
+        1. 「店」タブで、よく行くお店を1つ登録します。<br>
+        2. 「計算」タブで、その店を選びます。<br>
+        3. 「商品追加」を押して、価格・数量・税率（8% / 10%）を入れます。<br>
+        4. 右下の「支払合計」を見ればOKです。必要なら「履歴保存」も押せます。
       </div>
-    </section>
-  </main>
+    </div>
+
+    <details class="note" style="margin-top:12px;" open>
+      <summary class="note-title">画面の説明（ボタンの意味）</summary>
+      <div class="note-body">
+        <strong>① 計算</strong><br>
+        <ul class="help">
+          <li><strong>店</strong>：いま計算したいお店を選びます。</li>
+          <li><strong>店登録へ</strong>：お店の登録画面へ移動します。</li>
+          <li><strong>商品追加</strong>：入力行（カード）を1つ増やします。</li>
+          <li><strong>入力クリア</strong>：今の買い物の入力を全部消します（店プロフィールは消えません）。</li>
+          <li><strong>履歴保存</strong>：今の計算結果を「履歴」に残します（あとで見返せます）。</li>
+        </ul>
+
+        <strong>② 店</strong><br>
+        <ul class="help">
+          <li><strong>登録</strong>：入力中の店プロフィールを保存します。</li>
+          <li><strong>リセット</strong>：入力フォームを空に戻します（保存済みの店は消えません）。</li>
+          <li><strong>各店の「編集」</strong>：その店の設定をフォームに読み込んで直せます。</li>
+          <li><strong>各店の「削除」</strong>：その店プロフィールを消します。</li>
+          <li><strong>全店エクスポート / インポート</strong>：端末移行用です（詳細モードで表示）。</li>
+        </ul>
+
+        <strong>③ 履歴</strong><br>
+        <ul class="help">
+          <li><strong>履歴削除</strong>：履歴を消します。店プロフィールは残ります。</li>
+          <li>履歴には「その時の店の計算ルール」も一緒に保存されるので、後から店設定を変えても履歴が崩れません。</li>
+        </ul>
+
+        <strong>④ 検証（詳細モード）</strong><br>
+        <ul class="help">
+          <li><strong>レシート合計</strong>：実際のレシートの合計金額（支払額）を入れます。</li>
+          <li><strong>検証開始</strong>：アプリの計算とレシート合計の差を出し、合いそうな丸め設定候補を探します。</li>
+          <li><strong>候補を店に適用</strong>：見つかった候補を、その店プロフィールに反映します。</li>
+        </ul>
+
+        <strong>⑤ 右上のボタン</strong><br>
+        <ul class="help">
+          <li><strong>モード：簡単 / 詳細</strong>：迷いにくさ優先なら簡単、再現性・機能優先なら詳細です。</li>
+          <li><strong>BGM / 効果音 / 音量</strong>：音を切りたい時はOFFにできます。BGMは最初にボタンを押す必要がある場合があります。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="note" style="margin-top:12px;">
+      <summary class="note-title">計算ルール（店によって違うところ）</summary>
+      <div class="note-body">
+        店によって「税の計算」と「端数処理（1円未満の扱い）」が違います。ここが、みっちが困っていた部分です。<br><br>
+        <ul class="help">
+          <li><strong>商品ごとに税計算（レジ方式）</strong>：商品1つずつに税をかけて、端数処理も商品ごとに入るイメージです。</li>
+          <li><strong>税率ごとに合計して税計算（まとめ方式）</strong>：8%のものを全部足す → 税、10%も同様、というイメージです。</li>
+        </ul>
+        さらに詳細モードでは、<strong>切り捨て / 四捨五入 / 切り上げ</strong> や <strong>10円単位で丸め</strong> なども選べます。
+      </div>
+    </details>
+
+    <details class="note" style="margin-top:12px;">
+      <summary class="note-title">入力のコツ（間違えにくくする）</summary>
+      <div class="note-body">
+        <ul class="help">
+          <li><strong>税抜 / 税込</strong>：商品カードの「価格の種類」で切り替えできます（簡単モードは上のバーで一括切替）。</li>
+          <li><strong>数量</strong>：同じ商品を2個買ったら「2」です。</li>
+          <li><strong>税率</strong>：8%（食品など）/ 10%（それ以外）。店プロフィールで、使う税率を固定できます。</li>
+          <li><strong>割引</strong>：行（商品）にも、合計にも、％引き / 円引きを設定できます（詳細モード）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="note" style="margin-top:12px;">
+      <summary class="note-title">オフライン利用（スマホで使う）</summary>
+      <div class="note-body">
+        このアプリはデータを端末内（localStorage）に保存します。基本的に通信は不要です。<br>
+        <strong>最初の1回だけ</strong>、ネットにつながる状態で開いてください（必要なファイルを保存します）。<br><br>
+        スマホでは「ホーム画面に追加」すると、アプリのように使えます。
+      </div>
+    </details>
+
+    <details class="note" style="margin-top:12px;">
+      <summary class="note-title">よくある困りごと</summary>
+      <div class="note-body">
+        <ul class="help">
+          <li><strong>入力が反応しない / 古い画面のまま</strong>：オフライン保存の影響で、更新が反映されにくい時があります。右下に「更新があります」が出たら再読み込みしてください。</li>
+          <li><strong>それでも直らない</strong>：ブラウザの「サイトデータを削除（キャッシュ削除）」をすると直ることがあります。</li>
+        </ul>
+      </div>
+    </details>
+  </div>
+</section>
+
+</main>
+
+
+<div id="updateToast" class="toast is-hidden" role="status" aria-live="polite">
+  <div class="toast-text">更新があります。反映するには再読み込みしてください。</div>
+  <button id="reloadBtn" class="btn small" type="button">再読み込み</button>
+</div>
 
   <footer class="footer">
-    <div class="muted">MITTI ShopHelper NEON v1.0.0 / 保存先：端末内（localStorage）</div>
+    <div class="muted">MITTI ShopHelper / 保存先：端末内（localStorage）</div>
   </footer>
-
   <script src="app.js"></script>
   <script>
+    // Service Worker（オフライン対応 + 更新反映）
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
+      navigator.serviceWorker.register("./sw.js").then((reg) => {
+        const toast = document.getElementById("updateToast");
+        const reloadBtn = document.getElementById("reloadBtn");
+
+        const showToast = () => {
+          if (!toast) return;
+          toast.classList.remove("is-hidden");
+          if (reloadBtn && reg.waiting) {
+            reloadBtn.onclick = () => {
+              // 新しいSWを即時有効化 → controllerchange でリロード
+              reg.waiting.postMessage({ type: "SKIP_WAITING" });
+            };
+          }
+        };
+
+        // すでに待機中の更新がある場合
+        if (reg.waiting) showToast();
+
+        // 更新検知
+        reg.addEventListener("updatefound", () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener("statechange", () => {
+            // 既にページを開いている状態で新SWが入ったら、トースト表示
+            if (nw.state === "installed" && navigator.serviceWorker.controller) {
+              showToast();
+            }
+          });
+        });
+      }).catch(() => {});
+
+      // 新SWが有効になったら1回だけリロード
+      let reloading = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloading) return;
+        reloading = true;
+        window.location.reload();
+      });
     }
   </script>
 </body>

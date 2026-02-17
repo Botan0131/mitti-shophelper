@@ -1,11 +1,25 @@
 {
-  "name": "MITTI ShopHelper NEON v1.0",
-  "short_name": "MITTI",
-  "start_url": "./",
+  "name": "MITTI ShopHelper",
+  "short_name": "ShopHelper",
+  "start_url": "./?source=pwa",
   "display": "standalone",
-  "background_color": "#060812",
+  "background_color": "#050510",
   "theme_color": "#0b1020",
-  "description": "みっちのための買い物計算アプリ（オフライン対応）",
-  "lang": "ja",
-  "orientation": "portrait"
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "scope": "./",
+  "id": "./?app=mitti-shophelper",
+  "description": "みっちのための買い物計算アプリ（店ごとの税・丸め・割引ルールに対応）"
 }
