@@ -41,14 +41,11 @@
     // Main background music: use the same short beep sample as the sound effects.
     // Keeping the BGM audio small avoids excessively long code output. Users can replace this
     // base64 string with a longer melody if desired.
-    bgm: `
-UklGRmQmAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==` ,
+    bgm: `UklGRmQmAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==` ,
     // Short beep for add actions
-    add: `
-UklGRmQmAABXQVZFZm10 IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==` ,
+    add: `UklGRmQmAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==` ,
     // Short beep for delete actions (same sample reused for simplicity)
-    del: `
-UklGRmQmAABXQVZFZm10 IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==`
+    del: `UklGRmQmAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YWQmAAAAt1kCAOEr7wqMdCkhDYXXSi7unPMfn9cBtq/EqpcTgeKFaECYTLLIcq+a8GVasjUEn7iXMeTms9RzgcfC3Qw92ESiIUXGeYOHLwqwvztYDGDAGxb/CqT7c7NStyrHYmpQec3OQccp3pZfy7hUtwffqD8mZULngPH9uGjpXmNl5Lp10PpxSyQ==`
   };
 
   // Audio objects
