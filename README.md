@@ -1,1 +1,1 @@
-# mitti-shophelper
+# mitti-helper
