@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 512 512">
+  <!-- The 192 icon reuses the 512 design via viewBox scaling -->
+  <rect width="512" height="512" fill="#0c0f14"/>
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <text x="50%" y="50%" dy="-30" text-anchor="middle" font-size="180" fill="#00eaff" font-family="'Orbitron', sans-serif" filter="url(#glow)">MITTI</text>
+  <text x="50%" y="70%" text-anchor="middle" font-size="80" fill="#ff00ff" font-family="'Orbitron', sans-serif" filter="url(#glow)">helper</text>
+</svg>

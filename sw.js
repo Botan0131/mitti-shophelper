@@ -1,73 +1,66 @@
-/* MITTI ShopHelper Service Worker (v1.0.3) */
-const CACHE_NAME = "mitti-shophelper-neon-v1.0.3";
+/*
+ * Service Worker for MITTI‑Helper
+ *
+ * This service worker implements a simple cache-first strategy for static
+ * resources. It caches the core assets on install and serves them from cache
+ * while attempting to fetch an updated version from the network in the
+ * background. It also cleans up old caches during activation. This allows the
+ * application to function offline when hosted via GitHub Pages on a subpath.
+ */
+
+const CACHE_VERSION = 'mitti-helper-v1';
+const CACHE_NAME = `${CACHE_VERSION}`;
 const CORE_ASSETS = [
-  "./",
-  "./index.html",
-  "./style.css",
-  "./app.js",
-  "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
+  './',
+  './index.html',
+  './style.css',
+  './app.js',
+  './manifest.json',
+  './icons/icon-192.svg',
+  './icons/icon-512.svg'
 ];
 
-self.addEventListener("install", (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(CORE_ASSETS);
-    await self.skipWaiting();
-  })());
+// Install event: pre-cache core assets
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(CORE_ASSETS);
+    })
+  );
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)));
-    await self.clients.claim();
-  })());
+// Activate event: clean up old caches
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then(keys => {
+      return Promise.all(
+        keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
+      );
+    })
+  );
 });
 
-self.addEventListener("message", (event) => {
-  if (event.data === "SKIP_WAITING") {
-    self.skipWaiting();
-  }
-});
-
-function isHtmlRequest(req){
-  return req.mode === "navigate" || (req.headers.get("accept") || "").includes("text/html");
-}
-
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  const url = new URL(req.url);
-
-  if (url.origin !== self.location.origin) return;
-
-  // HTMLはネット優先（更新が反映されやすい）
-  if (isHtmlRequest(req)) {
-    event.respondWith((async () => {
-      try {
-        const net = await fetch(req);
-        const cache = await caches.open(CACHE_NAME);
-        cache.put(req, net.clone());
-        return net;
-      } catch (e) {
-        const cached = await caches.match(req);
-        return cached || caches.match("./index.html");
-      }
-    })());
-    return;
-  }
-
-  // それ以外はキャッシュ優先 + 裏で更新（stale-while-revalidate）
-  event.respondWith((async () => {
-    const cached = await caches.match(req);
-    const cache = await caches.open(CACHE_NAME);
-
-    const fetchPromise = fetch(req).then((res) => {
-      if (res && res.status === 200) cache.put(req, res.clone());
-      return res;
-    }).catch(() => null);
-
-    return cached || (await fetchPromise) || new Response("", { status: 504 });
-  })());
+// Fetch event: cache-first with network fallback
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  // Only handle GET requests
+  if (request.method !== 'GET') return;
+  event.respondWith(
+    caches.match(request).then(cachedResponse => {
+      const fetchPromise = fetch(request).then(networkResponse => {
+        // If response is OK, update cache
+        if (networkResponse && networkResponse.status === 200) {
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(request, networkResponse.clone());
+          });
+        }
+        return networkResponse;
+      }).catch(() => {
+        // network failed
+        return cachedResponse;
+      });
+      // Serve cached if available; else fetch from network
+      return cachedResponse || fetchPromise;
+    })
+  );
 });
